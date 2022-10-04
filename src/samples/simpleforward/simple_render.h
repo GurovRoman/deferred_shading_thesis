@@ -12,14 +12,34 @@
 #include <vk_fbuf_attachment.h>
 #include <vk_images.h>
 #include <vk_swapchain.h>
+#include <vk_quad.h>
 #include <string>
 #include <iostream>
+
+struct GBufferLayer
+{
+  vk_utils::VulkanImageMem image {};
+  VkSampler sampler {VK_NULL_HANDLE};
+};
+
+struct GBuffer
+{
+  std::vector<GBufferLayer> color_layers;
+  GBufferLayer depth_stencil_layer;
+  VkRenderPass renderpass {VK_NULL_HANDLE};
+};
 
 class SimpleRender : public IRender
 {
 public:
-  const std::string VERTEX_SHADER_PATH = "../resources/shaders/simple.vert";
-  const std::string FRAGMENT_SHADER_PATH = "../resources/shaders/simple.frag";
+  const std::string GBUFFER_VERTEX_SHADER_PATH = "../resources/shaders/gbuffer.vert";
+  const std::string GBUFFER_FRAGMENT_SHADER_PATH = "../resources/shaders/gbuffer.frag";
+
+  const std::string SHADING_VERTEX_SHADER_PATH = "../resources/shaders/shading.vert";
+  const std::string SHADING_FRAGMENT_SHADER_PATH = "../resources/shaders/shading.frag";
+
+  const std::string SHADOWMAP_VERTEX_SHADER_PATH = "../resources/shaders/depth_only.vert";
+  const std::string SHADOWMAP_FRAGMENT_SHADER_PATH = "../resources/shaders/depth_only.frag";
 
   SimpleRender(uint32_t a_width, uint32_t a_height);
   ~SimpleRender()  { Cleanup(); };
@@ -38,6 +58,8 @@ public:
 
   void LoadScene(const char *path, bool transpose_inst_matrices) override;
   void DrawFrame(float a_time, DrawMode a_mode) override;
+
+  void ClearPipeline(pipeline_data_t &pipeline);
 
   //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -86,30 +108,36 @@ protected:
   std::vector<VkFence> m_frameFences;
   std::vector<VkCommandBuffer> m_cmdBuffersDrawMain;
 
-  struct
-  {
-    LiteMath::float4x4 projView;
-    LiteMath::float4x4 model;
-  } pushConst2M;
+  PushConst pushConst;
 
   UniformParams m_uniforms {};
   VkBuffer m_ubo = VK_NULL_HANDLE;
   VkDeviceMemory m_uboAlloc = VK_NULL_HANDLE;
   void* m_uboMappedMem = nullptr;
 
-  pipeline_data_t m_basicForwardPipeline {};
+  pipeline_data_t m_gBufferPipeline {};
+  pipeline_data_t m_shadingPipeline {};
+  pipeline_data_t m_shadowmapPipeline {};
 
-  VkDescriptorSet m_dSet = VK_NULL_HANDLE;
-  VkDescriptorSetLayout m_dSetLayout = VK_NULL_HANDLE;
-  VkRenderPass m_screenRenderPass = VK_NULL_HANDLE; // main renderpass
+  VkDescriptorSet m_graphicsDescriptorSet = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_graphicsDescriptorSetLayout = VK_NULL_HANDLE;
+
+  VkDescriptorSet m_lightingDescriptorSet = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_lightingDescriptorSetLayout = VK_NULL_HANDLE;
+
+  VkDescriptorSet m_lightingFragmentDescriptorSet = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_lightingFragmentDescriptorSetLayout = VK_NULL_HANDLE;
+
+  VkDescriptorSet m_shadowMapDescriptorSet             = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_shadowMapDescriptorSetLayout = VK_NULL_HANDLE;
 
   std::shared_ptr<vk_utils::DescriptorMaker> m_pBindings = nullptr;
+  vk_utils::DescriptorMaker& GetDescMaker();
 
   // *** presentation
   VkSurfaceKHR m_surface = VK_NULL_HANDLE;
   VulkanSwapChain m_swapchain;
   std::vector<VkFramebuffer> m_frameBuffers;
-  vk_utils::VulkanImageMem m_depthBuffer{};
   // ***
 
   // *** GUI
@@ -122,7 +150,7 @@ protected:
   uint32_t m_width  = 1024u;
   uint32_t m_height = 1024u;
   uint32_t m_framesInFlight  = 2u;
-  bool m_vsync = false;
+  bool m_vsync = true;
 
   VkPhysicalDeviceFeatures m_enabledDeviceFeatures = {};
   std::vector<const char*> m_deviceExtensions      = {};
@@ -133,15 +161,32 @@ protected:
 
   std::shared_ptr<SceneManager> m_pScnMgr;
 
-  void DrawFrameSimple();
+  GBuffer m_gbuffer;
+
+  GBufferLayer m_shadow_map;
+  VkFramebuffer m_shadowMapFrameBuffer;
+  VkRenderPass m_shadowMapRenderPass;
+
+  LiteMath::uint2 m_shadowMapSize = {8192, 8192};
+
+  bool m_shadowMapDebugQuadEnabled = false;
+  std::unique_ptr<vk_utils::IQuad> m_shadowMapDebugQuad;
+  VkDescriptorSet       m_shadowMapQuadDS;
+  VkDescriptorSetLayout m_shadowMapQuadDSLayout = nullptr;
+
+  vec3 m_light_direction = LiteMath::normalize({0., -1., 0.1});
+  float m_light_radius = 100;
+  float m_light_length = 150;
 
   void CreateInstance();
   void CreateDevice(uint32_t a_deviceId);
 
-  void BuildCommandBufferSimple(VkCommandBuffer cmdBuff, VkFramebuffer frameBuff,
-                                VkImageView a_targetImageView, VkPipeline a_pipeline);
+  void BuildCommandBufferSimple(VkCommandBuffer cmdBuff, size_t frameBufferIndex);
+  void AddCmdsShadowmapPass(VkCommandBuffer a_cmdBuff, size_t frameBufferIndex);
 
-  virtual void SetupSimplePipeline();
+  void SetupGBufferPipeline();
+  void SetupShadingPipeline();
+  void SetupShadowmapPipeline();
   void CleanupPipelineAndSwapchain();
   void RecreateSwapChain();
 
@@ -153,6 +198,25 @@ protected:
   void SetupDeviceFeatures();
   void SetupDeviceExtensions();
   void SetupValidationLayers();
+
+  void ClearGBuffer();
+  void CreateGBuffer();
+
+  void ClearShadowmap();
+  void CreateShadowmap();
+
+  void generateBRDFLUT();
+  void generateCubemaps();
+
+  GBufferLayer loadEnvMap(const std::string& filename,
+    VkFormat format,
+    VkImageUsageFlags imageUsageFlags = VK_IMAGE_USAGE_SAMPLED_BIT,
+    VkImageLayout imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+  GBufferLayer m_brdf_lut;
+  GBufferLayer m_env_map;
+  GBufferLayer m_irradiance_map;
+  GBufferLayer m_prefiltered_map;
 };
 
 

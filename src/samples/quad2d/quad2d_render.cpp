@@ -337,7 +337,7 @@ void Quad2D_Render::LoadScene(const char*, bool)
   auto texData = LoadBMP("../resources/textures/texture1.bmp", &texW, &texH);
   
   m_imageData    = vk_utils::allocateColorTextureFromDataLDR(m_device, m_physicalDevice, (const unsigned char*)texData.data(), texW, texH, 1, VK_FORMAT_R8G8B8A8_UNORM,
-                                                             m_pCopyHelper, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+                                                             m_pCopyHelper, 4, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 
   m_imageSampler = vk_utils::createSampler(m_device, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT);
 

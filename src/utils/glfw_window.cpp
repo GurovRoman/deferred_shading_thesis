@@ -9,6 +9,8 @@
 #include <memory>
 #include <cstdint>
 #include <sstream>
+#include <thread>
+#include <chrono>
 
 #include "Camera.h"
 
@@ -208,11 +210,15 @@ void mainLoop(std::shared_ptr<IRender> &app, GLFWwindow* window, bool displayGUI
     
     app->ProcessInput(g_appInput);
     app->UpdateCamera(g_appInput.cams, 2);
-    if(displayGUI)
-      app->DrawFrame(static_cast<float>(thisTime), DrawMode::WITH_GUI);
-    else
-      app->DrawFrame(static_cast<float>(thisTime), DrawMode::NO_GUI);
-
+    if (!glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
+      if (displayGUI)
+        app->DrawFrame(static_cast<float>(thisTime), DrawMode::WITH_GUI);
+      else
+        app->DrawFrame(static_cast<float>(thisTime), DrawMode::NO_GUI);
+    } else {
+      using std::chrono_literals::operator""ms;
+      std::this_thread::sleep_for(100ms);
+    }
     // count and print FPS
     //
     avgTime += diffTime;

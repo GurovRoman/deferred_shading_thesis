@@ -104,6 +104,7 @@ static inline float4x4 projectionMatrix(float fovy, float aspect, float zNear, f
   return res;
 }
 
+// z goes to [-1, 1]
 static inline float4x4 perspectiveMatrix(float fovy, float aspect, float zNear, float zFar)
 {
   const float ymax = zNear * tanf(fovy * 3.14159265358979323846f / 360.0f);
@@ -124,6 +125,7 @@ static inline float4x4 perspectiveMatrix(float fovy, float aspect, float zNear, 
   return res;
 }
 
+// z goes to [0, 1]
 static inline float4x4 ortoMatrix(const float l, const float r, const float b, const float t, const float n, const float f)
 {
   float4x4 res;
@@ -132,13 +134,13 @@ static inline float4x4 ortoMatrix(const float l, const float r, const float b, c
   res(0,2) = 0;
   res(0,3) = -(r + l) / (r - l);
   res(1,0) = 0;
-  res(1,1) = 2.0f / (t - b);
+  res(1,1) = -2.0f / (t - b);
   res(1,2) = 0;
-  res(1,3) = -(t + b) / (t - b);
+  res(1,3) = (t + b) / (t - b);
   res(2,0) = 0;
   res(2,1) = 0;
-  res(2,2) = -2.0f / (f - n);
-  res(2,3) = -(f + n) / (f - n);
+  res(2,2) = -1.0f / (f - n);
+  res(2,3) = -(f + n) / (f - n) + 0.5f;
   res(3,0) = 0.0f;
   res(3,1) = 0.0f;
   res(3,2) = 0.0f;

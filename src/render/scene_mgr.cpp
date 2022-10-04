@@ -3,8 +3,6 @@
 #include "scene_mgr.h"
 #include "vk_utils.h"
 #include "vk_buffers.h"
-#include "../loader_utils/hydraxml.h"
-
 
 VkTransformMatrixKHR transformMatrixFromFloat4x4(const LiteMath::float4x4 &m)
 {
@@ -16,56 +14,62 @@ VkTransformMatrixKHR transformMatrixFromFloat4x4(const LiteMath::float4x4 &m)
       transformMatrix.matrix[i][j] = m(i, j);
     }
   }
-
   return transformMatrix;
 }
 
-SceneManager::SceneManager(VkDevice a_device, VkPhysicalDevice a_physDevice,
-  uint32_t a_transferQId, uint32_t a_graphicsQId, bool debug) : m_device(a_device), m_physDevice(a_physDevice),
-                 m_transferQId(a_transferQId), m_graphicsQId(a_graphicsQId), m_debug(debug)
+VkFormat formatFromImageInfo(const ImageFileInfo &info)
 {
-  vkGetDeviceQueue(m_device, m_transferQId, 0, &m_transferQ);
-  vkGetDeviceQueue(m_device, m_graphicsQId, 0, &m_graphicsQ);
-  VkDeviceSize scratchMemSize = 64 * 1024 * 1024;
-  m_pCopyHelper = std::make_shared<vk_utils::PingPongCopyHelper>(m_physDevice, m_device, m_transferQ, m_transferQId, scratchMemSize);
-  m_pMeshData   = std::make_shared<Mesh8F>();
-
-}
-
-bool SceneManager::LoadSceneXML(const std::string &scenePath, bool transpose)
-{
-  auto hscene_main = std::make_shared<hydra_xml::HydraScene>();
-  auto res         = hscene_main->LoadState(scenePath);
-
-  if(res < 0)
+  VkFormat res = VK_FORMAT_R8G8B8A8_UNORM;
+  if(info.bytesPerChannel == 1)
   {
-    RUN_TIME_ERROR("LoadSceneXML error");
-    return false;
-  }
-
-  for(auto loc : hscene_main->MeshFiles())
-  {
-    auto meshId    = AddMeshFromFile(loc);
-    auto instances = hscene_main->GetAllInstancesOfMeshLoc(loc); 
-    for(size_t j = 0; j < instances.size(); ++j)
+    switch(info.channels)
     {
-      if(transpose)
-        InstanceMesh(meshId, LiteMath::transpose(instances[j]));
-      else
-        InstanceMesh(meshId, instances[j]);
+    case 1:
+      res = VK_FORMAT_R8_SRGB;
+      break;
+    case 2:
+      res = VK_FORMAT_R8G8_SRGB;
+      break;
+    case 3:
+    case 4:
+      res = VK_FORMAT_R8G8B8A8_SRGB;
+      break;
     }
   }
-
-  for(auto cam : hscene_main->Cameras())
+  else if(info.bytesPerChannel == 4)
   {
-    m_sceneCameras.push_back(cam);
+    std::cout << "Well that sucks ass!\n\n";
+    switch(info.channels)
+    {
+    case 1:
+      res = VK_FORMAT_R32_SFLOAT;
+      break;
+    case 2:
+      res = VK_FORMAT_R32G32_SFLOAT;
+      break;
+    case 3:
+    case 4:
+      res = VK_FORMAT_R32G32B32A32_SFLOAT;
+      break;
+    }
   }
+  else
+    res = VK_FORMAT_UNDEFINED;
 
-  LoadGeoDataOnGPU();
-  hscene_main = nullptr;
-
-  return true;
+  return res;
 }
+
+
+SceneManager::SceneManager(VkDevice a_device, VkPhysicalDevice a_physDevice, uint32_t a_graphicsQId,
+  std::shared_ptr<vk_utils::ICopyEngine> a_pCopyHelper, LoaderConfig a_config) :
+                m_device(a_device), m_physDevice(a_physDevice), m_graphicsQId(a_graphicsQId),
+                m_pCopyHelper(a_pCopyHelper), m_config(a_config)
+{
+  vkGetDeviceQueue(m_device, m_graphicsQId, 0, &m_graphicsQ);
+
+  m_pool = vk_utils::createCommandPool(m_device, m_graphicsQId, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+}
+
 
 hydra_xml::Camera SceneManager::GetCamera(uint32_t camId) const
 {
@@ -89,43 +93,60 @@ hydra_xml::Camera SceneManager::GetCamera(uint32_t camId) const
   return m_sceneCameras[camId];
 }
 
-void SceneManager::LoadSingleTriangle()
+//void SceneManager::LoadSingleTriangle()
+//{
+//  std::vector<Vertex> vertices =
+//  {
+//    { {  1.0f,  1.0f, 0.0f } },
+//    { { -1.0f,  1.0f, 0.0f } },
+//    { {  0.0f, -1.0f, 0.0f } }
+//  };
+//
+//  std::vector<uint32_t> indices = { 0, 1, 2 };
+//  m_totalIndices = static_cast<uint32_t>(indices.size());
+//
+//  VkDeviceSize vertexBufSize = sizeof(Vertex) * vertices.size();
+//  VkDeviceSize indexBufSize  = sizeof(uint32_t) * indices.size();
+//
+//  VkBufferUsageFlags flags = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+//  if(m_useRTX)
+//  {
+//    flags |= VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+//             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+//  }
+//
+//  const VkBufferUsageFlags vertFlags = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | flags;
+//  m_geoVertBuf = vk_utils::createBuffer(m_device, vertexBufSize, vertFlags);
+//
+//  const VkBufferUsageFlags idxFlags = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | flags;
+//  m_geoIdxBuf = vk_utils::createBuffer(m_device, indexBufSize, idxFlags);
+//
+//  VkMemoryAllocateFlags allocFlags {};
+//  if(m_useRTX)
+//  {
+//    allocFlags |= VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT_KHR;
+//  }
+//
+//  m_geoMemAlloc = vk_utils::allocateAndBindWithPadding(m_device, m_physDevice, {m_geoVertBuf, m_geoIdxBuf}, allocFlags);
+//
+//  m_pCopyHelper->UpdateBuffer(m_geoVertBuf, 0, vertices.data(),  vertexBufSize);
+//  m_pCopyHelper->UpdateBuffer(m_geoIdxBuf,  0, indices.data(), indexBufSize);
+//
+//  if(m_config.build_acc_structs)
+//  {
+//    AddBLAS(0);
+//  }
+//}
+
+VkPipelineVertexInputStateCreateInfo SceneManager::GetPipelineVertexInputStateCreateInfo()
 {
-  std::vector<Vertex> vertices =
+  auto currState = m_pMeshData->VertexInputLayout();
+  if(m_config.instance_matrix_as_vertex_attribute)
   {
-    { {  1.0f,  1.0f, 0.0f } },
-    { { -1.0f,  1.0f, 0.0f } },
-    { {  0.0f, -1.0f, 0.0f } }
-  };
-
-  std::vector<uint32_t> indices = { 0, 1, 2 };
-  m_totalIndices = static_cast<uint32_t>(indices.size());
-
-  VkDeviceSize vertexBufSize = sizeof(Vertex) * vertices.size();
-  VkDeviceSize indexBufSize  = sizeof(uint32_t) * indices.size();
-  
-  VkMemoryRequirements vertMemReq, idxMemReq; 
-  m_geoVertBuf = vk_utils::createBuffer(m_device, vertexBufSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &vertMemReq);
-  m_geoIdxBuf  = vk_utils::createBuffer(m_device, indexBufSize,  VK_BUFFER_USAGE_INDEX_BUFFER_BIT  | VK_BUFFER_USAGE_TRANSFER_DST_BIT, &idxMemReq);
-
-  size_t pad = vk_utils::getPaddedSize(vertMemReq.size, idxMemReq.alignment);
-
-  VkMemoryAllocateInfo allocateInfo = {};
-  allocateInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-  allocateInfo.pNext           = nullptr;
-  allocateInfo.allocationSize  = pad + idxMemReq.size;
-  allocateInfo.memoryTypeIndex = vk_utils::findMemoryType(vertMemReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_physDevice);
-
-
-  VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, nullptr, &m_geoMemAlloc));
-
-  VK_CHECK_RESULT(vkBindBufferMemory(m_device, m_geoVertBuf, m_geoMemAlloc, 0));
-  VK_CHECK_RESULT(vkBindBufferMemory(m_device, m_geoIdxBuf,  m_geoMemAlloc, pad));
-  m_pCopyHelper->UpdateBuffer(m_geoVertBuf, 0, vertices.data(),  vertexBufSize);
-  m_pCopyHelper->UpdateBuffer(m_geoIdxBuf,  0, indices.data(), indexBufSize);
+    vk_utils::AddInstanceMatrixAttributeToVertexLayout(1, sizeof(LiteMath::float4x4), currState);
+  }
+  return currState;
 }
-
-
 
 uint32_t SceneManager::AddMeshFromFile(const std::string& meshPath)
 {
@@ -144,10 +165,13 @@ uint32_t SceneManager::AddMeshFromData(cmesh::SimpleMesh &meshData)
   assert(meshData.IndicesNum() > 0);
 
   m_pMeshData->Append(meshData);
+  auto old_size = m_matIDs.size();
+  m_matIDs.resize(m_matIDs.size() + meshData.matIndices.size());
+  std::copy(meshData.matIndices.begin(), meshData.matIndices.end(), m_matIDs.begin() + old_size);
 
   MeshInfo info;
-  info.m_vertNum = (uint32_t)meshData.VerticesNum();
-  info.m_indNum  = (uint32_t)meshData.IndicesNum();
+  info.m_vertNum = meshData.VerticesNum();
+  info.m_indNum  = meshData.IndicesNum();
 
   info.m_vertexOffset = m_totalVertices;
   info.m_indexOffset  = m_totalIndices;
@@ -155,17 +179,12 @@ uint32_t SceneManager::AddMeshFromData(cmesh::SimpleMesh &meshData)
   info.m_vertexBufOffset = info.m_vertexOffset * m_pMeshData->SingleVertexSize();
   info.m_indexBufOffset  = info.m_indexOffset  * m_pMeshData->SingleIndexSize();
 
-  m_totalVertices += (uint32_t)meshData.VerticesNum();
-  m_totalIndices  += (uint32_t)meshData.IndicesNum();
+  m_totalVertices += meshData.VerticesNum();
+  m_totalIndices  += meshData.IndicesNum();
 
   m_meshInfos.push_back(info);
-  Box4f meshBox;
-  for (uint32_t i = 0; i < meshData.VerticesNum(); ++i) {
-    meshBox.include(reinterpret_cast<float4*>(meshData.vPos4f.data())[i]);
-  }
-  m_meshBboxes.push_back(meshBox);
 
-  return (uint32_t)m_meshInfos.size() - 1;
+  return m_meshInfos.size() - 1;
 }
 
 uint32_t SceneManager::InstanceMesh(const uint32_t meshId, const LiteMath::float4x4 &matrix, bool markForRender)
@@ -176,25 +195,12 @@ uint32_t SceneManager::InstanceMesh(const uint32_t meshId, const LiteMath::float
   m_instanceMatrices.push_back(matrix);
 
   InstanceInfo info;
-  info.inst_id       = (uint32_t)m_instanceMatrices.size() - 1;
+  info.inst_id       = m_instanceMatrices.size() - 1;
   info.mesh_id       = meshId;
   info.renderMark    = markForRender;
   info.instBufOffset = (m_instanceMatrices.size() - 1) * sizeof(matrix);
 
   m_instanceInfos.push_back(info);
-
-  Box4f instBox;
-  for (uint32_t i = 0; i < 8; ++i) {
-    float4 corner = float4(
-      (i & 1) == 0 ? m_meshBboxes[meshId].boxMin.x : m_meshBboxes[meshId].boxMax.x,
-      (i & 2) == 0 ? m_meshBboxes[meshId].boxMin.y : m_meshBboxes[meshId].boxMax.y,
-      (i & 4) == 0 ? m_meshBboxes[meshId].boxMin.z : m_meshBboxes[meshId].boxMax.z,
-      1
-    );
-    instBox.include(matrix * corner);
-  }
-  sceneBbox.include(instBox);
-  m_instanceBboxes.push_back(instBox);
 
   return info.inst_id;
 }
@@ -211,19 +217,75 @@ void SceneManager::UnmarkInstance(const uint32_t instId)
   m_instanceInfos[instId].renderMark = false;
 }
 
-void SceneManager::LoadGeoDataOnGPU()
+void SceneManager::InitMeshCPU(MESH_FORMATS format)
 {
-  VkDeviceSize vertexBufSize = m_pMeshData->VertexDataSize();
-  VkDeviceSize indexBufSize  = m_pMeshData->IndexDataSize();
-  VkDeviceSize infoBufSize   = m_meshInfos.size() * sizeof(uint32_t) * 2;
+  if(format == MESH_FORMATS::MESH_8F)
+    m_pMeshData = std::make_shared<Mesh8F>();
+  else if(format == MESH_FORMATS::MESH_4F)
+    m_pMeshData = std::make_shared<Mesh4F>();
+}
 
-  m_geoVertBuf  = vk_utils::createBuffer(m_device, vertexBufSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-  m_geoIdxBuf   = vk_utils::createBuffer(m_device, indexBufSize,  VK_BUFFER_USAGE_INDEX_BUFFER_BIT  | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-  m_meshInfoBuf = vk_utils::createBuffer(m_device, infoBufSize,   VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+void SceneManager::InitGeoBuffersGPU(uint32_t a_meshNum, uint32_t a_totalVertNum, uint32_t a_totalIndicesNum)
+{
+  VkDeviceSize vertexBufSize = m_pMeshData->SingleVertexSize() * a_totalVertNum;
+  VkDeviceSize indexBufSize  = m_pMeshData->SingleIndexSize() * a_totalIndicesNum;
+
+  VkBufferUsageFlags flags = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+  std::vector<VkBuffer> all_buffers;
+
+  const VkBufferUsageFlags vertFlags = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | flags;
+  m_geoVertBuf = vk_utils::createBuffer(m_device, vertexBufSize, vertFlags);
+  all_buffers.push_back(m_geoVertBuf);
+
+  const VkBufferUsageFlags idxFlags = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | flags;
+  m_geoIdxBuf = vk_utils::createBuffer(m_device, indexBufSize, idxFlags);
+  all_buffers.push_back(m_geoIdxBuf);
+
+  VkDeviceSize infoBufSize = a_meshNum * sizeof(uint32_t) * 2;
+  m_meshInfoBuf = vk_utils::createBuffer(m_device, infoBufSize, flags | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+  all_buffers.push_back(m_meshInfoBuf);
+
+  VkDeviceSize matIdsBufSize = (a_totalIndicesNum / 3) * sizeof(uint32_t);
+  m_matIdsBuf = vk_utils::createBuffer(m_device, matIdsBufSize, flags | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+  all_buffers.push_back(m_matIdsBuf);
 
   VkMemoryAllocateFlags allocFlags {};
 
-  m_geoMemAlloc = vk_utils::allocateAndBindWithPadding(m_device, m_physDevice, {m_geoVertBuf, m_geoIdxBuf, m_meshInfoBuf}, allocFlags);
+  m_geoMemAlloc = vk_utils::allocateAndBindWithPadding(m_device, m_physDevice, all_buffers, allocFlags);
+}
+
+void SceneManager::LoadOneMeshOnGPU(uint32_t meshIdx)
+{
+  VkDeviceSize vertexBufSize = m_meshInfos[meshIdx].m_vertNum * m_pMeshData->SingleVertexSize();
+  VkDeviceSize indexBufSize  = m_meshInfos[meshIdx].m_indNum  * m_pMeshData->SingleIndexSize();
+
+  auto vertSrc = m_pMeshData->VertexData() + m_loadedVertices * (m_pMeshData->SingleVertexSize() / sizeof(float));
+  auto indSrc  = m_pMeshData->IndexData() + m_loadedIndices;
+  auto loadedPrims = (m_loadedIndices / 3);
+  m_pCopyHelper->UpdateBuffer(m_geoVertBuf, m_loadedVertices * m_pMeshData->SingleVertexSize(), vertSrc, vertexBufSize);
+  m_pCopyHelper->UpdateBuffer(m_geoIdxBuf, m_loadedIndices * m_pMeshData->SingleIndexSize(), indSrc, indexBufSize);
+  m_pCopyHelper->UpdateBuffer(m_matIdsBuf,  loadedPrims * sizeof(uint32_t),
+    m_matIDs.data() + loadedPrims, (m_meshInfos[meshIdx].m_indNum / 3) * sizeof(m_matIDs[0]));
+
+//  if(meshIdx == 8)
+//  {
+//    std::ofstream file("tmp.txt");
+//    for(size_t i = 0; i < m_meshInfos[meshIdx].m_indNum / 3; ++i)
+//    {
+//      file << m_matIDs[loadedPrims + i] << "\n";
+//    }
+//    file.close();
+//  }
+  m_loadedVertices += m_meshInfos[meshIdx].m_vertNum ;
+  m_loadedIndices  += m_meshInfos[meshIdx].m_indNum;
+}
+
+void SceneManager::LoadCommonGeoDataOnGPU()
+{
+//  VkDeviceSize vertexBufSize = m_pMeshData->VertexDataSize();
+//  VkDeviceSize indexBufSize  = m_pMeshData->IndexDataSize();
+//  VkDeviceSize instMatBufSize = m_instanceMatrices.size() * sizeof(m_instanceMatrices[0]);
 
   std::vector<LiteMath::uint2> mesh_info_tmp;
   for(const auto& m : m_meshInfos)
@@ -231,14 +293,132 @@ void SceneManager::LoadGeoDataOnGPU()
     mesh_info_tmp.emplace_back(m.m_indexOffset, m.m_vertexOffset);
   }
 
-  m_pCopyHelper->UpdateBuffer(m_geoVertBuf, 0, m_pMeshData->VertexData(), vertexBufSize);
-  m_pCopyHelper->UpdateBuffer(m_geoIdxBuf,  0, m_pMeshData->IndexData(), indexBufSize);
+//  m_pCopyHelper->UpdateBuffer(m_geoVertBuf, 0, m_pMeshData->VertexData(), vertexBufSize);
+//  m_pCopyHelper->UpdateBuffer(m_geoIdxBuf,  0, m_pMeshData->IndexData(), indexBufSize);
+//  if(m_config.instance_matrix_as_vertex_attribute)
+//  {
+//    m_pCopyHelper->UpdateBuffer(m_instMatricesBuf, 0, m_instanceMatrices.data(), instMatBufSize);
+//  }
   if(!mesh_info_tmp.empty())
-    m_pCopyHelper->UpdateBuffer(m_meshInfoBuf,  0, mesh_info_tmp.data(), mesh_info_tmp.size() * sizeof(mesh_info_tmp[0]));
+  {
+    m_pCopyHelper->UpdateBuffer(m_meshInfoBuf, 0, mesh_info_tmp.data(), mesh_info_tmp.size() * sizeof(mesh_info_tmp[0]));
+  }
+}
+
+void SceneManager::LoadInstanceDataOnGPU()
+{
+  VkDeviceSize instMatBufSize = m_instanceMatrices.size() * sizeof(m_instanceMatrices[0]);
+  VkBufferUsageFlags flags = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+
+  m_instMatricesBuf = vk_utils::createBuffer(m_device, instMatBufSize, flags);
+  m_instMemAlloc    = vk_utils::allocateAndBindWithPadding(m_device, m_physDevice, {m_instMatricesBuf});
+
+  m_pCopyHelper->UpdateBuffer(m_instMatricesBuf, 0, m_instanceMatrices.data(), instMatBufSize);
+}
+
+vk_utils::VulkanImageMem SceneManager::LoadSpecialTexture()
+{
+  ImageFileInfo texInfo = getImageInfo(missingTextureImgPath);
+  if(!texInfo.is_ok)
+  {
+    std::stringstream ss;
+    ss << "Special texture is missing at: " << missingTextureImgPath << " !";
+    vk_utils::logWarning(ss.str());
+  }
+  auto textureUsage      = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+  VkFormat textureFormat = formatFromImageInfo(texInfo);
+  auto mips              = vk_utils::calcMipLevelsCount(texInfo.width, texInfo.height);
+
+  return vk_utils::createImg(m_device, texInfo.width, texInfo.height, textureFormat, textureUsage, VK_IMAGE_ASPECT_COLOR_BIT, mips);
+
+}
+
+void SceneManager::LoadMaterialDataOnGPU()
+{
+  VkDeviceSize materialBufSize = m_materials.size() * sizeof(m_materials[0]);
+
+  VkBufferUsageFlags matFlags = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+
+  m_materialBuf = vk_utils::createBuffer(m_device, materialBufSize, matFlags);
+  m_matMemAlloc = vk_utils::allocateAndBindWithPadding(m_device, m_physDevice, {m_materialBuf});
+
+  m_pCopyHelper->UpdateBuffer(m_materialBuf, 0, m_materials.data(), materialBufSize);
+
+  if(m_config.load_materials == MATERIAL_LOAD_MODE::MATERIALS_AND_TEXTURES)
+  {
+    m_textures.reserve(m_textureInfos.size() + 1);
+    for(size_t idx = 0; idx < m_textureInfos.size(); ++idx)
+    {
+      auto texInfo = m_textureInfos[idx];
+      if(texInfo.is_ok)
+      {
+        auto textureUsage      = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        VkFormat textureFormat = formatFromImageInfo(texInfo);
+        auto mips              = vk_utils::calcMipLevelsCount(texInfo.width, texInfo.height);
+        m_textures.push_back(vk_utils::createImg(m_device, texInfo.width, texInfo.height, textureFormat, textureUsage,
+          VK_IMAGE_ASPECT_COLOR_BIT, mips));
+        m_texturesById.insert({idx, m_textures.back()});
+      }
+    }
+
+    // load special texture to indicate missing/corrupt textures in the scene
+    {
+      m_textures.push_back(LoadSpecialTexture());
+      m_texturesById.insert({m_textureInfos.size(), m_textures.back()});
+      m_textureInfos.push_back(getImageInfo(missingTextureImgPath));
+    }
+
+    vk_utils::allocateImgsBindCreateView(m_device, m_physDevice, m_textures);
+    if(!m_textures.empty())
+      m_texturesMemAlloc = m_textures[0].mem;
+
+    VkSampler common_sampler = vk_utils::createSampler(m_device, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+      VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK);
+    m_samplers.reserve(m_textures.size());
+    m_textureViews.reserve(m_textureInfos.size());
+
+    for(size_t idx = 0; idx < m_textureInfos.size(); ++idx)
+    {
+      if(m_texturesById.count(idx))
+      {
+        auto texInfo = m_textureInfos[idx];
+        auto tex = m_texturesById.at(idx);
+        auto tmp = loadImageLDR(texInfo);// @TODO: load hdr textures too
+        int bpp = texInfo.bytesPerChannel * texInfo.channels;
+        if(texInfo.channels == 3)
+          bpp = texInfo.bytesPerChannel * (texInfo.channels + 1);
+        m_pCopyHelper->UpdateImage(tex.image, tmp.data(), texInfo.width, texInfo.height, bpp, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+        if(tex.mipLvls > 1)
+        {
+          auto cmdBuf = vk_utils::createCommandBuffer(m_device, m_pool);
+          vk_utils::generateMipChainCmd(cmdBuf, tex.image, texInfo.width, texInfo.height, tex.mipLvls);
+          vk_utils::executeCommandBufferNow(cmdBuf, m_graphicsQ, m_device);
+        }
+        m_textureViews.push_back(tex.view);
+      }
+      else
+      {
+        m_textureViews.push_back(m_textures.back().view);
+      }
+      m_samplers.push_back(common_sampler);
+    }
+  }
 }
 
 void SceneManager::DrawMarkedInstances()
 {
+
+}
+
+SceneManager::~SceneManager()
+{
+  DestroyScene();
+  if(m_pool != VK_NULL_HANDLE)
+  {
+    vkDestroyCommandPool(m_device, m_pool, nullptr);
+    m_pool = VK_NULL_HANDLE;
+  }
 
 }
 
@@ -262,10 +442,10 @@ void SceneManager::DestroyScene()
     m_meshInfoBuf = VK_NULL_HANDLE;
   }
 
-  if(m_instanceMatricesBuffer != VK_NULL_HANDLE)
+  if(m_matIdsBuf != VK_NULL_HANDLE)
   {
-    vkDestroyBuffer(m_device, m_instanceMatricesBuffer, nullptr);
-    m_instanceMatricesBuffer = VK_NULL_HANDLE;
+    vkDestroyBuffer(m_device, m_matIdsBuf, nullptr);
+    m_matIdsBuf = VK_NULL_HANDLE;
   }
 
   if(m_geoMemAlloc != VK_NULL_HANDLE)
@@ -274,10 +454,71 @@ void SceneManager::DestroyScene()
     m_geoMemAlloc = VK_NULL_HANDLE;
   }
 
-  m_pCopyHelper = nullptr;
+  if(m_instMatricesBuf != VK_NULL_HANDLE)
+  {
+    vkDestroyBuffer(m_device, m_instMatricesBuf, nullptr);
+    m_instMatricesBuf = VK_NULL_HANDLE;
+  }
 
+  if(m_instMemAlloc != VK_NULL_HANDLE)
+  {
+    vkFreeMemory(m_device, m_instMemAlloc, nullptr);
+    m_instMemAlloc = VK_NULL_HANDLE;
+  }
+
+  if(m_materialBuf != VK_NULL_HANDLE)
+  {
+    vkDestroyBuffer(m_device, m_materialBuf, nullptr);
+    m_materialBuf = VK_NULL_HANDLE;
+  }
+  if(m_matMemAlloc != VK_NULL_HANDLE)
+  {
+    vkFreeMemory(m_device, m_matMemAlloc, nullptr);
+    m_matMemAlloc = VK_NULL_HANDLE;
+  }
+
+  for(auto& [_, tex] : m_texturesById)
+  {
+    if(tex.view != VK_NULL_HANDLE)
+      vkDestroyImageView(m_device, tex.view, nullptr);
+
+    if(tex.image != VK_NULL_HANDLE)
+      vkDestroyImage(m_device, tex.image, nullptr);
+  }
+  if(m_texturesMemAlloc != VK_NULL_HANDLE)
+  {
+    vkFreeMemory(m_device, m_texturesMemAlloc, nullptr);
+    m_texturesMemAlloc = VK_NULL_HANDLE;
+  }
+
+  {
+    std::sort(m_samplers.begin(), m_samplers.end());
+    auto last = std::unique(m_samplers.begin(), m_samplers.end());
+    m_samplers.erase(last, m_samplers.end());
+    for(auto& samp : m_samplers)
+    {
+      if(samp != VK_NULL_HANDLE)
+      {
+        vkDestroySampler(m_device, samp, nullptr);
+      }
+    }
+  }
+
+  m_loadedVertices        = 0;
+  m_loadedIndices         = 0;
+  m_totalVertices = 0u;
+  m_totalIndices  = 0u;
   m_meshInfos.clear();
   m_pMeshData = nullptr;
   m_instanceInfos.clear();
   m_instanceMatrices.clear();
+  m_matIDs.clear();
+
+  m_materials.clear();
+
+  m_textureInfos.clear();
+  m_textureViews.clear();
+  m_samplers.clear();
+  m_texturesById.clear();
+  m_sceneCameras.clear();
 }

@@ -9,10 +9,13 @@ endif()
 
 set(RENDER_SOURCE
         ../../render/scene_mgr.cpp
+        ../../render/scene_mgr_loaders.cpp
         ../../render/render_imgui.cpp
+        ../../utils/imGuIZMO.quat/imGuIZMOquat.cpp
         create_render.cpp
         simple_render.cpp
-        simple_render_tex.cpp)
+        #simple_render_tex.cpp
+        )
 
 add_executable(simple_forward main.cpp ../../utils/glfw_window.cpp ${VK_UTILS_SRC} ${SCENE_LOADER_SRC} ${RENDER_SOURCE} ${IMGUI_SRC})
 
