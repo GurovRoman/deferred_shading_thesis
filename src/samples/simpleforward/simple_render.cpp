@@ -210,6 +210,7 @@ void SimpleRender::SetupShadingPipeline()
   bindings.BindImage(2, m_irradiance_map.image.view, m_irradiance_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   bindings.BindImage(3, m_prefiltered_map.image.view, m_prefiltered_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   bindings.BindImage(4, m_brdf_lut.image.view, m_brdf_lut.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  bindings.BindImage(5, m_shadow_map.image.view, m_shadow_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
   bindings.BindEnd(&m_lightingDescriptorSet, &m_lightingDescriptorSetLayout);
 
 
@@ -373,6 +374,7 @@ void SimpleRender::CreateUniformBuffer()
   m_uniforms.exposure = 1.;
   m_uniforms.IBLShadowedRatio = 1.;
   m_uniforms.envMapRotation = 0.;
+  m_uniforms.enableSSS = true;
 
   UpdateUniformBuffer(0.0f);
 }
@@ -787,7 +789,8 @@ void SimpleRender::SetupGUIElements()
     ImGui::CheckboxFlags("##debugflag5", &m_uniforms.debugFlags, 1 << 4); ImGui::SameLine();
     ImGui::CheckboxFlags("##debugflag6", &m_uniforms.debugFlags, 1 << 5); ImGui::SameLine();
     ImGui::CheckboxFlags("##debugflag7", &m_uniforms.debugFlags, 1 << 6); ImGui::SameLine();
-    ImGui::CheckboxFlags("##debugflag8", &m_uniforms.debugFlags, 1 << 7);
+    ImGui::CheckboxFlags("##debugflag8", &m_uniforms.debugFlags, 1 << 7); ImGui::SameLine();
+    ImGui::Checkbox("SSS", &m_uniforms.enableSSS);
 
     ImGui::PushItemWidth(ImGui::CalcItemWidth() / 2);
     ImGui::SliderFloat("Metallic", &m_uniforms.debugMetallic, 0., 1., "%.2f"); ImGui::SameLine();

@@ -52,6 +52,7 @@ struct UniformParams
   float IBLShadowedRatio;
   float envMapRotation;
   int tonemapFunction;
+  BOOL(enableSSS)
 };
 
 struct MaterialData_pbrMR

@@ -17,6 +17,7 @@ layout (binding = 1) uniform sampler2DShadow shadowmapTex;
 layout (binding = 2) uniform samplerCube samplerIrradiance;
 layout (binding = 3) uniform samplerCube prefilteredMap;
 layout (binding = 4) uniform sampler2D samplerBRDFLUT;
+layout (binding = 5) uniform sampler2D shadowmapTexPlain;
 
 layout (input_attachment_index = 0, set = 1, binding = 0) uniform subpassInput inNormal;
 layout (input_attachment_index = 1, set = 1, binding = 1) uniform subpassInput inTangent;
@@ -27,6 +28,7 @@ layout (input_attachment_index = 4, set = 1, binding = 4) uniform subpassInput i
 layout (location = 0) in vec2 outUV;
 
 const float M_PI = 3.141592653589793;
+const float M_ONE_OVER_PI = 1.0 / M_PI;
 
 float sq(float x) { return x*x; }
 
@@ -228,6 +230,42 @@ vec3 fromSky(vec3 v) {
     return rotateXZ(v, -Params.envMapRotation);
 }
 
+vec3 T(float s) {
+    return
+        vec3(0.233, 0.455, 0.649) * exp(-s*s/0.0064) +
+        vec3(0.1, 0.336, 0.344) * exp(-s*s/0.0484) +
+        vec3(0.118, 0.198, 0.0) * exp(-s*s/0.187) +
+        vec3(0.113, 0.007, 0.007) * exp(-s*s/0.567) +
+        vec3(0.358, 0.004, 0.0) * exp(-s*s/1.99) +
+        vec3(0.078, 0.0, 0.0) * exp(-s*s/7.41);
+}
+
+float transmittanceDepth(vec3 wPos, vec3 wNormal)
+{
+    const vec4 wShrinkedpos = vec4(wPos - 0.005f * wNormal, 1.0f);
+
+    const vec4 shwPos = Params.lightMatrix * wShrinkedpos;
+    const vec4 sShadow = vec4(shwPos.xy,
+        texture(shadowmapTexPlain, shwPos.xy * 0.5 + 0.5).r, 1.);
+
+    mat4 lightInv = inverse(Params.lightMatrix);
+
+    return abs((lightInv * shwPos).z - (lightInv * sShadow).z);
+}
+
+vec3 diffuseTransmittance(
+    vec3 albedo,
+    vec3 position,
+    vec3 N,
+    vec3 L,
+    vec3 lightColor)
+{
+    // http://www.iryoku.com/translucency/downloads/Real-Time-Realistic-Skin-Translucency.pdf
+    float s = transmittanceDepth(position, N);
+    float E = max(0.3 + dot(-N, L), 0.0);
+    return T(s) * lightColor * albedo * E * M_ONE_OVER_PI;
+}
+
 // Normal Distribution function --------------------------------------
 float D_GGX(float dotNH, float roughness)
 {
@@ -278,7 +316,7 @@ vec3 getIBLContribution(
 
 // Specular BRDF composition --------------------------------------------
 
-vec3 BRDF(vec3 L, vec3 V, vec3 N, float metallic, float roughness, float shadowmap_visibility)
+vec3 BRDF(vec3 L, vec3 V, vec3 N, float metallic, float roughness, float shadowmap_visibility, vec3 wPos)
 {
     vec3 f0 = vec3(0.04);
 
@@ -295,7 +333,7 @@ vec3 BRDF(vec3 L, vec3 V, vec3 N, float metallic, float roughness, float shadowm
     float dotNH = clamp(dot(N, H), 0.0, 1.0);
 
     // Light color fixed
-    vec3 lightColor = vec3(1.f);
+    vec3 lightColor = vec3(1.f, 0.8f, 0.8f);
 
     vec3 color = vec3(0.0);
 
@@ -318,6 +356,11 @@ vec3 BRDF(vec3 L, vec3 V, vec3 N, float metallic, float roughness, float shadowm
     vec3 reflection = -normalize(reflect(V, N));
     reflection.y *= -1.0f;
     color += getIBLContribution(diffuseColor, specularColor, dotNV, roughness, N, reflection) * (1 - (1 - shadowmap_visibility) * (1 - Params.IBLShadowedRatio));
+
+    if (Params.enableSSS) {
+        color += diffuseTransmittance(diffuseColor, wPos, N, L, lightColor);
+        //color = vec3(transmittanceDepth(wPos, N));
+    }
 
     return color;
 }
@@ -389,7 +432,7 @@ void main()
     // Specular contribution
     vec3 Lo = vec3(0.0);
     vec3 L = lightDir;
-    Lo += BRDF(L, V, N, metallic, roughness, shadowmap_visibility);
+    Lo += BRDF(L, V, N, metallic, roughness, shadowmap_visibility, position);
 
     // Combine with ambient
     vec3 color = materialcolor() * ambient;
