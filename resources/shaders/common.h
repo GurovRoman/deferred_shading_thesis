@@ -51,6 +51,7 @@ struct UniformParams
   float prefilteredCubeMipLevels;
   float IBLShadowedRatio;
   float envMapRotation;
+  int tonemapFunction;
 };
 
 struct MaterialData_pbrMR

@@ -776,6 +776,8 @@ void SimpleRender::SetupGUIElements()
 
     ImGui::Text("(%.2f, %.2f, %.2f)", m_light_direction.x, m_light_direction.y, m_light_direction.z);
 
+    static const std::array tonemaps {"Reinhard", "Uncharted 2", "Fitted ACES", "Uchimura", "Lottes"};
+    ImGui::Combo("Tonemap", &m_uniforms.tonemapFunction, tonemaps.data(), tonemaps.size());
 
     ImGui::Text("Debug flags:"); ImGui::SameLine();
     ImGui::CheckboxFlags("##debugflag1", &m_uniforms.debugFlags, 1 << 0); ImGui::SameLine();

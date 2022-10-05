@@ -50,7 +50,95 @@ vec3 toLinear(vec3 sRGB)
     return mix(higher, lower, cutoff);
 }
 
+vec3 reinhard(vec3 color)
+{
+    return color / (color + vec3(1.0));
+}
+
+vec3 _uncharted2_tonemap_partial(vec3 x)
+{
+    const float Aa = 0.15f;
+    const float B = 0.50f;
+    const float C = 0.10f;
+    const float D = 0.20f;
+    const float E = 0.02f;
+    const float F = 0.30f;
+    return ((x*(Aa*x+C*B)+D*E)/(x*(Aa*x+B)+D*F))-E/F;
+}
+
+vec3 uncharted2Filmic(vec3 v)
+{
+    float exposure_bias = 2.0f;
+    vec3 curr = _uncharted2_tonemap_partial(v * exposure_bias);
+
+    vec3 W = vec3(11.2f);
+    vec3 white_scale = vec3(1.0f) / _uncharted2_tonemap_partial(W);
+    return curr * white_scale;
+}
+
+const mat3 aces_input_matrix =
+{
+vec3(0.59719f, 0.35458f, 0.04823f),
+vec3(0.07600f, 0.90834f, 0.01566f),
+vec3(0.02840f, 0.13383f, 0.83777f)
+};
+
+const mat3 aces_output_matrix =
+{
+vec3( 1.60475f, -0.53108f, -0.07367f),
+vec3(-0.10208f,  1.10813f, -0.00605f),
+vec3(-0.00327f, -0.07276f,  1.07602f)
+};
+
+vec3 rtt_and_odt_fit(vec3 v)
+{
+    vec3 a = v * (v + 0.0245786f) - 0.000090537f;
+    vec3 b = v * (0.983729f * v + 0.4329510f) + 0.238081f;
+    return a / b;
+}
+
+vec3 acesFitted(vec3 v)
+{
+    v = transpose(aces_input_matrix) * v;
+    v = rtt_and_odt_fit(v);
+    return transpose(aces_output_matrix) * v;
+}
+
+vec3 tonemapUchimura(vec3 x, float P, float a, float m, float l, float c, float b) {
+    // Uchimura 2017, "HDR theory and practice"
+    // Math: https://www.desmos.com/calculator/gslcdxvipg
+    // Source: https://www.slideshare.net/nikuque/hdr-theory-and-practicce-jp
+    float l0 = ((P - m) * l) / a;
+    float L0 = m - m / a;
+    float L1 = m + (1.0 - m) / a;
+    float S0 = m + l0;
+    float S1 = m + a * l0;
+    float C2 = (a * P) / (P - S1);
+    float CP = -C2 / P;
+
+    vec3 w0 = 1.0 - smoothstep(0.0f, m, x);
+    vec3 w2 = step(m + l0, x);
+    vec3 w1 = 1.0 - w0 - w2;
+
+    vec3 T = m * pow(x / m, vec3(c)) + b;
+    vec3 S = P - (P - S1) * exp(CP * (x - S0));
+    vec3 L = m + a * (x - m);
+
+    return T * w0 + L * w1 + S * w2;
+}
+
+vec3 tonemapUchimura(vec3 x) {
+    const float P = 1.0;  // max display brightness
+    const float a = 1.0;  // contrast
+    const float m = 0.22; // linear section start
+    const float l = 0.4;  // linear section length
+    const float c = 1.33; // black
+    const float b = 0.0;  // pedestal
+    return tonemapUchimura(x, P, a, m, l, c, b);
+}
+
 vec3 tonemapLottes(vec3 x) {
+    x *= 0.6f;
     // Lottes 2016, "Advanced Techniques and Optimization of HDR Color Pipelines"
     const float a = 1.6;
     const float d = 0.977;
@@ -67,6 +155,17 @@ vec3 tonemapLottes(vec3 x) {
     ((pow(hdrMax, a * d) - pow(midIn, a * d)) * midOut);
 
     return pow(x, vec3(a)) / (pow(x, vec3(a * d)) * b + c);
+}
+
+vec3 tonemap(vec3 v) {
+    switch (Params.tonemapFunction) {
+        case 0: return reinhard(v);
+        case 1: return uncharted2Filmic(v);
+        case 2: return acesFitted(v);
+        case 3: return tonemapUchimura(v);
+        case 4: return tonemapLottes(v);
+    }
+    return vec3(0.);
 }
 
 float calculateShadow(const vec3 lightSpacePos, const float bias) {
@@ -275,7 +374,7 @@ void main()
     if (screenSpacePos.z == 1.) {
         out_fragColor = textureLod(prefilteredMap, toSky(V * vec3(-1, 1, -1)), 0);
         if ((Params.debugFlags & 4) == 0)
-            out_fragColor = vec4(tonemapLottes(out_fragColor.xyz * Params.exposure), 1.);
+            out_fragColor = vec4(tonemap(out_fragColor.xyz * Params.exposure), 1.);
         return;
     }
 
@@ -297,7 +396,7 @@ void main()
     color += Lo;
 
     if ((Params.debugFlags & 4) == 0)
-        out_fragColor = vec4(tonemapLottes(color * Params.exposure), 1.);
+        out_fragColor = vec4(tonemap(color * Params.exposure), 1.);
     else
         out_fragColor = vec4(color, 1.);
 
