@@ -40,6 +40,7 @@ struct UniformParams
   mat4 lightMatrix;
   vec3 baseColor;
   float lightIntensity;
+  vec3 lightPosition;
   float exposure;
   float time;
   float screenWidth;
@@ -51,6 +52,8 @@ struct UniformParams
   float prefilteredCubeMipLevels;
   float IBLShadowedRatio;
   float envMapRotation;
+  float lightRadius;
+  float lightLength;
 };
 
 struct MaterialData_pbrMR

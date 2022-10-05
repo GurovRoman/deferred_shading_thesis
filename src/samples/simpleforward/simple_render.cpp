@@ -369,10 +369,13 @@ void SimpleRender::CreateUniformBuffer()
 
   m_uniforms.baseColor = LiteMath::float3(0.9f, 0.92f, 1.0f);
   m_uniforms.animateLightColor = false;
-  m_uniforms.lightIntensity = 1.;
+  m_uniforms.lightIntensity = 7.2;
   m_uniforms.exposure = 1.;
   m_uniforms.IBLShadowedRatio = 1.;
   m_uniforms.envMapRotation = 0.;
+  m_uniforms.lightRadius = 39;
+  m_uniforms.lightLength = 83;
+  m_uniforms.lightPosition = {-33.5, 7.5, -1.};
 
   UpdateUniformBuffer(0.0f);
 }
@@ -381,9 +384,8 @@ void SimpleRender::UpdateUniformBuffer(float a_time)
 {
 // most uniforms are updated in GUI -> SetupGUIElements()
   m_uniforms.time = a_time;
-  vec3 lightDirection = LiteMath::rotate4x4Y(-m_uniforms.envMapRotation * DEG_TO_RAD) * m_light_direction;
-  m_uniforms.lightMatrix = ortoMatrix(-m_light_radius, m_light_radius, -m_light_radius, m_light_radius, -m_light_length / 2, m_light_length / 2)
-                           * LiteMath::lookAt({0, 0, 0},  lightDirection * 10.0f, {0, 1, 0});
+  m_uniforms.lightMatrix = OpenglToVulkanProjectionMatrixFix() * perspectiveMatrix(m_uniforms.lightRadius, 1.f, 0.1f, m_uniforms.lightLength)
+                           * LiteMath::lookAt(m_uniforms.lightPosition,  m_uniforms.lightPosition + m_light_direction * 10.0f, {0, 1, 0});
   m_uniforms.screenWidth = m_width;
   m_uniforms.screenHeight = m_height;
   memcpy(m_uboMappedMem, &m_uniforms, sizeof(m_uniforms));
@@ -765,8 +767,8 @@ void SimpleRender::SetupGUIElements()
     ImGui::SameLine();
     ImGui::BeginGroup();
     ImGui::PushItemWidth(ImGui::CalcItemWidth() * 0.6f);
-    ImGui::DragFloat("Light radius", &m_light_radius);
-    ImGui::DragFloat("Light length", &m_light_length);
+    ImGui::DragFloat("Light radius", &m_uniforms.lightRadius);
+    ImGui::DragFloat("Light length", &m_uniforms.lightLength);
     ImGui::DragFloat("Light intensity", &m_uniforms.lightIntensity, 0.1f, 0.f, FLT_MAX);
     ImGui::DragFloat("IBL in shadow", &m_uniforms.IBLShadowedRatio, 0.05f, 0.f, 1.f);
     ImGui::DragFloat("Envmap angle", &m_uniforms.envMapRotation, 1.f, -180.f, 180.f);
@@ -774,6 +776,11 @@ void SimpleRender::SetupGUIElements()
     ImGui::PopItemWidth();
     ImGui::EndGroup();
 
+    ImGui::DragFloat3("Light pos", reinterpret_cast<float *>(&m_uniforms.lightPosition), 0.1f, -180.f, 180.f);
+    if (ImGui::Button("Capture lightpos")) {
+      m_uniforms.lightPosition = m_cam.pos;
+      m_light_direction = m_cam.lookAt - m_cam.pos;
+    }
     ImGui::Text("(%.2f, %.2f, %.2f)", m_light_direction.x, m_light_direction.y, m_light_direction.z);
 
 

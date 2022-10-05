@@ -71,6 +71,7 @@ vec3 tonemapLottes(vec3 x) {
 
 float calculateShadow(const vec3 lightSpacePos, const float bias) {
     vec3 pos_proj = lightSpacePos * vec3(0.5f, 0.5f, 1.f) + vec3(0.5f, 0.5f, -bias);
+    if (clamp(pos_proj, 0., 1.) != pos_proj) return 0;
 
     float shadow_opacity = 0;
 
@@ -218,7 +219,7 @@ vec3 BRDF(vec3 L, vec3 V, vec3 N, float metallic, float roughness, float shadowm
 
     vec3 reflection = -normalize(reflect(V, N));
     reflection.y *= -1.0f;
-    color += getIBLContribution(diffuseColor, specularColor, dotNV, roughness, N, reflection) * (1 - (1 - shadowmap_visibility) * (1 - Params.IBLShadowedRatio));
+    // color += getIBLContribution(diffuseColor, specularColor, dotNV, roughness, N, reflection) * (1 - (1 - shadowmap_visibility) * (1 - Params.IBLShadowedRatio));
 
     return color;
 }
@@ -255,18 +256,37 @@ void main()
     mat4 mViewInv = inverse(Params.view);
 
     // from lightspace to worldspace
-    vec3 lightDir = -normalize(transpose(mat3(lightMat)) * vec3(0., 0., 1.));
+    vec3 lightDir = normalize((transpose(Params.lightMatrix) * vec4(0, 0, 1, 0)).xyz);
+    vec3 L = normalize(Params.lightPosition - position);
 
     //if (gl_FragCoord.x == 0.5 && gl_FragCoord.y == 0.5)
     //    debugPrintfEXT("lightDir: %v3f\n", lightDir.xyz);
 
+    float attenuation;
+    {
+        const float innerCosAngle = cos(radians(Params.lightRadius / 20.f));
+        const float outerCosAngle = cos(radians(Params.lightRadius / 2.f));
+        const float innerRadius = 0.1f;
+        const float outerRadius = Params.lightLength;
 
-    vec3 lightSpacePos = (lightMat * vec4(position, 1.)).xyz;
+        float distToLight = length(Params.lightPosition - position);
+        float cosAngle = dot(-L, lightDir);
 
-    float shadowmap_visibility = calculateShadow(lightSpacePos, 0.001f);
+        attenuation = clamp((cosAngle - outerCosAngle)/(innerCosAngle - outerCosAngle), 0, 1);
+
+        float lightSampleDist = mix(innerRadius, outerRadius, 0.05);
+        attenuation *=
+            lightSampleDist / max(innerRadius, distToLight)
+            * sq(max(1 - sq(distToLight / outerRadius), 0));
+    }
+
+    vec4 lightSpacePos_ = lightMat * vec4(position, 1.);
+    vec3 lightSpacePos = lightSpacePos_.xyz / lightSpacePos_.w;
+
+    float shadowmap_visibility = attenuation * calculateShadow(lightSpacePos, 0.00001f);
     //shadowmap_visibility = texture(shadowmapTex, lightSpacePos * vec3(0.5f, 0.5f, 1.f) + vec3(0.5f, 0.5f, -0.010f));
 
-    const float ambient_intensity = 0.f;//0.1f;
+    const float ambient_intensity = 0.01f;
     vec3 ambient = ambient_intensity * lightColor;
 
     vec3 N = normalize(transpose(mat3(Params.view)) * normal);
@@ -289,7 +309,6 @@ void main()
 
     // Specular contribution
     vec3 Lo = vec3(0.0);
-    vec3 L = lightDir;
     Lo += BRDF(L, V, N, metallic, roughness, shadowmap_visibility);
 
     // Combine with ambient

@@ -174,9 +174,7 @@ protected:
   VkDescriptorSet       m_shadowMapQuadDS;
   VkDescriptorSetLayout m_shadowMapQuadDSLayout = nullptr;
 
-  vec3 m_light_direction = LiteMath::normalize({0., -1., 0.1});
-  float m_light_radius = 100;
-  float m_light_length = 150;
+  vec3 m_light_direction = LiteMath::normalize({98., -20.5, 1.});
 
   void CreateInstance();
   void CreateDevice(uint32_t a_deviceId);
