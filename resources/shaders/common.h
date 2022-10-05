@@ -51,6 +51,8 @@ struct UniformParams
   float prefilteredCubeMipLevels;
   float IBLShadowedRatio;
   float envMapRotation;
+  BOOL(enableVsm)
+  uint vsmRadius;
 };
 
 struct MaterialData_pbrMR

@@ -17,6 +17,7 @@ layout (binding = 1) uniform sampler2DShadow shadowmapTex;
 layout (binding = 2) uniform samplerCube samplerIrradiance;
 layout (binding = 3) uniform samplerCube prefilteredMap;
 layout (binding = 4) uniform sampler2D samplerBRDFLUT;
+layout (binding = 5) uniform sampler2D shadowmapVsm;
 
 layout (input_attachment_index = 0, set = 1, binding = 0) uniform subpassInput inNormal;
 layout (input_attachment_index = 1, set = 1, binding = 1) uniform subpassInput inTangent;
@@ -74,15 +75,29 @@ float calculateShadow(const vec3 lightSpacePos, const float bias) {
 
     float shadow_opacity = 0;
 
-    vec2 texelSize = 1.0 / textureSize(shadowmapTex, 0);
+    if (!Params.enableVsm) {
+        vec2 texelSize = 1.0 / textureSize(shadowmapTex, 0);
 
-    for (int x = -1; x <= 2; ++x) {
-        for (int y = -1; y <= 2; ++y) {
-            shadow_opacity += texture(shadowmapTex, pos_proj + vec3((vec2(x, y) - vec2(0.5)) * texelSize, 0.));
+        for (int x = -1; x <= 2; ++x) {
+            for (int y = -1; y <= 2; ++y) {
+                shadow_opacity += texture(shadowmapTex, pos_proj + vec3((vec2(x, y) - vec2(0.5)) * texelSize, 0.));
+            }
         }
-    }
-    shadow_opacity /= 16;
+        shadow_opacity /= 16;
+    } else {
+        const float t = pos_proj.z + bias;
 
+        const float M1 = textureLod(shadowmapVsm, pos_proj.xy, 0).r;
+        const float M2 = textureLod(shadowmapVsm, pos_proj.xy, 0).g;
+
+        const float mu = M1;
+        const float sigma2 = max(M2 - sq(M1), 0.001f);
+
+        const float p = float(t <= mu);
+        const float pmax = sigma2 / (sigma2 + sq(t - mu));
+
+        return max(p, pmax);
+    }
     /*vec2 offset = vec2(greaterThan(fract(gl_FragCoord.xy * 0.5), vec2(0.25)));
     // mod
     offset.y += offset.x;

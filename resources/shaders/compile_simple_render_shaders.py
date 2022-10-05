@@ -10,7 +10,8 @@ if __name__ == '__main__':
         "shading.vert", "shading.frag",
         "depth_only.vert", "genbrdflut.vert",
         "genbrdflut.frag", "filtercube.vert",
-        "irradiancecube.frag", "prefilterenvmap.frag"
+        "irradiancecube.frag", "prefilterenvmap.frag",
+        "vsm_blur.frag"
     ]
 
     for shader in shader_list:

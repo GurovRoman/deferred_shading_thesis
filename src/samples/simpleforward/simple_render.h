@@ -167,7 +167,10 @@ protected:
   VkFramebuffer m_shadowMapFrameBuffer;
   VkRenderPass m_shadowMapRenderPass;
 
-  LiteMath::uint2 m_shadowMapSize = {8192, 8192};
+  std::unique_ptr<vk_utils::RenderTarget> m_pVSM;
+  pipeline_data_t m_vsmPipeline;
+
+  LiteMath::uint2 m_shadowMapSize = {2048, 2048};
 
   bool m_shadowMapDebugQuadEnabled = false;
   std::unique_ptr<vk_utils::IQuad> m_shadowMapDebugQuad;

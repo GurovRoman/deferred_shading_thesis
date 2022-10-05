@@ -103,7 +103,6 @@ void SimpleRender::InitPresentation(VkSurfaceKHR &a_surface, bool initGUI)
     vk_utils::RenderTargetInfo2D{ VkExtent2D{ m_width, m_height }, m_swapchain.GetFormat(),                                        // this is debug full screen quad
       VK_ATTACHMENT_LOAD_OP_LOAD, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR }); // seems we need LOAD_OP_LOAD if we want to draw quad to part of screen
 
-
   m_pGUIRender = std::make_shared<ImGuiRender>(m_instance, m_device, m_physicalDevice, m_queueFamilyIDXs.graphics, m_graphicsQueue, m_swapchain);
 }
 
@@ -210,6 +209,7 @@ void SimpleRender::SetupShadingPipeline()
   bindings.BindImage(2, m_irradiance_map.image.view, m_irradiance_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   bindings.BindImage(3, m_prefiltered_map.image.view, m_prefiltered_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   bindings.BindImage(4, m_brdf_lut.image.view, m_brdf_lut.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  bindings.BindImage (5, m_pVSM->m_attachments[0].view, m_pVSM->m_sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
   bindings.BindEnd(&m_lightingDescriptorSet, &m_lightingDescriptorSetLayout);
 
 
@@ -325,26 +325,35 @@ void SimpleRender::SetupShadowmapPipeline()
   bindings.BindImage(0, m_shadow_map.image.view, m_shadow_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
   bindings.BindEnd(&m_shadowMapQuadDS, &m_shadowMapQuadDSLayout);
 
-  auto make_shadowmap_pipeline = [this](const std::unordered_map<VkShaderStageFlagBits, std::string>& shader_paths)
+  auto make_shadowmap_pipeline = [this](VkDescriptorSetLayout dsLayout, VkRenderPass pass, VkPipelineVertexInputStateCreateInfo vistate, const std::unordered_map<VkShaderStageFlagBits, std::string>& shader_paths)
   {
     vk_utils::GraphicsPipelineMaker maker;
     maker.LoadShaders(m_device, shader_paths);
     pipeline_data_t result;
     result.layout = maker.MakeLayout(m_device,
-      { m_shadowMapDescriptorSetLayout }, sizeof(pushConst));
+      { dsLayout }, sizeof(pushConst));
 
     maker.SetDefaultState(m_shadowMapSize.x, m_shadowMapSize.y);
 
-    result.pipeline = maker.MakePipeline(m_device, m_pScnMgr->GetPipelineVertexInputStateCreateInfo(),
-      m_shadowMapRenderPass, {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR});
+    result.pipeline = maker.MakePipeline(m_device, vistate,
+      pass, {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR});
 
     return result;
   };
 
-  m_shadowmapPipeline = make_shadowmap_pipeline(
+  m_shadowmapPipeline = make_shadowmap_pipeline(m_shadowMapDescriptorSetLayout, m_shadowMapRenderPass, m_pScnMgr->GetPipelineVertexInputStateCreateInfo(),
     std::unordered_map<VkShaderStageFlagBits, std::string> {
       {VK_SHADER_STAGE_VERTEX_BIT, std::string{SHADOWMAP_VERTEX_SHADER_PATH} + ".spv"},
       //{VK_SHADER_STAGE_FRAGMENT_BIT, std::string{SHADOWMAP_FRAGMENT_SHADER_PATH} + ".spv"}
+    });
+
+  m_vsmPipeline = make_shadowmap_pipeline(m_shadowMapQuadDSLayout, m_pVSM->m_renderPass,
+    VkPipelineVertexInputStateCreateInfo{
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    },
+    std::unordered_map<VkShaderStageFlagBits, std::string> {
+      {VK_SHADER_STAGE_VERTEX_BIT, std::string{SHADING_VERTEX_SHADER_PATH} + ".spv"},
+      {VK_SHADER_STAGE_FRAGMENT_BIT, "../resources/shaders/vsm_blur.frag.spv"}
     });
 }
 
@@ -373,6 +382,8 @@ void SimpleRender::CreateUniformBuffer()
   m_uniforms.exposure = 1.;
   m_uniforms.IBLShadowedRatio = 1.;
   m_uniforms.envMapRotation = 0.;
+  m_uniforms.enableVsm = true;
+  m_uniforms.vsmRadius = 1;
 
   UpdateUniformBuffer(0.0f);
 }
@@ -434,6 +445,25 @@ void SimpleRender::AddCmdsShadowmapPass(VkCommandBuffer a_cmdBuff, size_t frameB
     }
   }
   vkCmdEndRenderPass(a_cmdBuff);
+
+  // VSM
+  {
+    std::vector<VkClearValue> clears{{VkClearColorValue{{0.0f, 0.0f, 0.0f, 0.0f}}}};
+    VkRenderPassBeginInfo vsmRP = m_pVSM->GetRenderPassBeginInfo(0, clears);
+    vkCmdBeginRenderPass(a_cmdBuff, &vsmRP, VK_SUBPASS_CONTENTS_INLINE);
+    {
+      vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_vsmPipeline.pipeline);
+      vkCmdBindDescriptorSets(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_vsmPipeline.layout, 0, 1, &m_shadowMapQuadDS, 0, nullptr);
+
+      auto radius = m_uniforms.vsmRadius;
+      vkCmdPushConstants(a_cmdBuff, m_vsmPipeline.layout,
+        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT, 0,
+        sizeof(radius), &radius);
+      vkCmdDraw(a_cmdBuff, 3, 1, 0, 0);
+    }
+    vkCmdEndRenderPass(a_cmdBuff);
+  }
 }
 
 void SimpleRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, size_t frameBufferIndex)
@@ -773,6 +803,9 @@ void SimpleRender::SetupGUIElements()
     ImGui::DragFloat("Exposure", &m_uniforms.exposure, 0.1f);
     ImGui::PopItemWidth();
     ImGui::EndGroup();
+
+    ImGui::Checkbox("VSM", &m_uniforms.enableVsm); ImGui::SameLine();
+    ImGui::DragInt("VSM Radius", reinterpret_cast<int*>(&m_uniforms.vsmRadius), 1.0f, 0, 10);
 
     ImGui::Text("(%.2f, %.2f, %.2f)", m_light_direction.x, m_light_direction.y, m_light_direction.z);
 
@@ -1262,6 +1295,49 @@ void SimpleRender::CreateShadowmap()
     .layers = 1,
   };
   VK_CHECK_RESULT(vkCreateFramebuffer(m_device, &fbufCreateInfo, nullptr, &m_shadowMapFrameBuffer));
+
+  // VSM stuff
+  m_pVSM = std::make_unique<vk_utils::RenderTarget>(m_device, VkExtent2D{m_shadowMapSize.x, m_shadowMapSize.y});
+
+  m_pVSM->CreateAttachment(
+    vk_utils::AttachmentInfo {
+      .format           = VK_FORMAT_R16G16_SFLOAT,
+      .usage            = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+      .imageSampleCount = VK_SAMPLE_COUNT_1_BIT,
+    });
+
+  VkDeviceMemory m_memVSM;
+  {
+    auto memReq = m_pVSM->GetMemoryRequirements()[0];
+
+    VkMemoryAllocateInfo allocateInfo {
+      .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .pNext           = nullptr,
+      .allocationSize  = memReq.size,
+      .memoryTypeIndex = vk_utils::findMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_physicalDevice),
+    };
+
+    VK_CHECK_RESULT(vkAllocateMemory(m_device, &allocateInfo, NULL, &m_memVSM));
+  }
+
+  m_pVSM->CreateViewAndBindMemory(m_memVSM, {0});
+
+  VkSamplerCreateInfo samplerInfo{};
+  samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  samplerInfo.magFilter = VK_FILTER_LINEAR;
+  samplerInfo.minFilter = VK_FILTER_LINEAR;
+  samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+  samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samplerInfo.mipLodBias = 0.0f;
+  samplerInfo.maxAnisotropy = 1.0f;
+  samplerInfo.minLod = 0.0f;
+  samplerInfo.maxLod = 1.0f;
+  samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+  vkCreateSampler(m_device, &samplerInfo, nullptr, &m_pVSM->m_sampler);
+
+  m_pVSM->CreateDefaultRenderPass();
 }
 
 
