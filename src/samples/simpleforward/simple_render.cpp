@@ -93,7 +93,7 @@ void SimpleRender::InitPresentation(VkSurfaceKHR &a_surface, bool initGUI)
   VK_CHECK_RESULT(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_presentationResources.imageAvailable));
   VK_CHECK_RESULT(vkCreateSemaphore(m_device, &semaphoreInfo, nullptr, &m_presentationResources.renderingFinished));
 
-  CreateGBuffer();
+  CreateGBuffer(m_uv_buffer);
   CreateShadowmap();
 
   // create full screen quad for debug purposes
@@ -148,13 +148,13 @@ vk_utils::DescriptorMaker& SimpleRender::GetDescMaker()
       {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 4},
       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, MAX_TEXTURES + 1}
     };
-    m_pBindings = std::make_unique<vk_utils::DescriptorMaker>(m_device, dtypes, 5);
+    m_pBindings = std::make_unique<vk_utils::DescriptorMaker>(m_device, dtypes, 7);
   }
 
   return *m_pBindings;
 }
 
-void SimpleRender::SetupGBufferPipeline()
+void SimpleRender::SetupGBufferPipeline(bool uv_buffer)
 {
   auto& bindings = GetDescMaker();
 
@@ -177,12 +177,11 @@ void SimpleRender::SetupGBufferPipeline()
 
     maker.SetDefaultState(m_width, m_height);
 
-    std::array<VkPipelineColorBlendAttachmentState, 4> cba_state;
-
-    cba_state.fill(VkPipelineColorBlendAttachmentState {
-      .blendEnable    = VK_FALSE,
-      .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-    });
+    std::vector<VkPipelineColorBlendAttachmentState> cba_state{ m_gbuffer.color_layers.size(),
+      {
+        .blendEnable    = VK_FALSE,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+      } };
 
     maker.colorBlending.attachmentCount = static_cast<uint32_t>(cba_state.size());
     maker.colorBlending.pAttachments = cba_state.data();
@@ -195,75 +194,64 @@ void SimpleRender::SetupGBufferPipeline()
 
   m_gBufferPipeline = make_deferred_pipeline(
     std::unordered_map<VkShaderStageFlagBits, std::string> {
-      {VK_SHADER_STAGE_FRAGMENT_BIT, std::string{GBUFFER_FRAGMENT_SHADER_PATH} + ".spv"},
+      {VK_SHADER_STAGE_FRAGMENT_BIT, std::string{GBUFFER_FRAGMENT_SHADER_PATH} + (uv_buffer ? ".uvbuf" : "") + ".spv"},
       {VK_SHADER_STAGE_VERTEX_BIT, std::string{GBUFFER_VERTEX_SHADER_PATH} + ".spv"}
     });
 }
 
-void SimpleRender::SetupShadingPipeline()
+void SimpleRender::SetupShadingPipeline(bool uv_buffer)
 {
   auto& bindings = GetDescMaker();
 
   bindings.BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT);
   bindings.BindBuffer(0, m_ubo, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-  bindings.BindImage(1, m_shadow_map.image.view, m_shadow_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-  bindings.BindImage(2, m_irradiance_map.image.view, m_irradiance_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-  bindings.BindImage(3, m_prefiltered_map.image.view, m_prefiltered_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-  bindings.BindImage(4, m_brdf_lut.image.view, m_brdf_lut.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  bindings.BindImage(1, m_irradiance_map.image.view, m_irradiance_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  bindings.BindImage(2, m_prefiltered_map.image.view, m_prefiltered_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  bindings.BindImage(3, m_brdf_lut.image.view, m_brdf_lut.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  if (uv_buffer)
+  {
+    bindings.BindBuffer(4, m_pScnMgr->GetMaterialsBuffer());
+    bindings.BindImageArray(5, m_pScnMgr->GetTextureViews(), m_pScnMgr->GetTextureSamplers());
+  }
   bindings.BindEnd(&m_lightingDescriptorSet, &m_lightingDescriptorSetLayout);
 
+  m_lightingFragmentDescriptorSet = !uv_buffer ? &m_lightingFragmentDescriptorSetReference.first : &m_lightingFragmentDescriptorSetUVBuffer.first;
+  m_lightingFragmentDescriptorSetLayout = !uv_buffer ? &m_lightingFragmentDescriptorSetReference.second : &m_lightingFragmentDescriptorSetUVBuffer.second;
 
-  if (m_lightingFragmentDescriptorSetLayout == nullptr)
+  // images may be recreated, so DescriptorMaker cache won't work
+  if (*m_lightingFragmentDescriptorSet == VK_NULL_HANDLE)
   {
     bindings.BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT);
-    bindings.BindImage(0, m_gbuffer.color_layers[0].image.view,
+    bindings.BindImage(0, m_gbuffer.depth_stencil_layer.image.view,
       nullptr, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
-    bindings.BindImage(1, m_gbuffer.color_layers[1].image.view,
-      nullptr, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
-    bindings.BindImage(2, m_gbuffer.color_layers[2].image.view,
-      nullptr, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
-    bindings.BindImage(3, m_gbuffer.depth_stencil_layer.image.view,
-      nullptr, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
-    bindings.BindImage(4, m_gbuffer.color_layers[3].image.view,
-      nullptr, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
-    bindings.BindEnd(&m_lightingFragmentDescriptorSet, &m_lightingFragmentDescriptorSetLayout);
+    for (size_t i = 0; i < m_gbuffer.color_layers.size(); ++i)
+      bindings.BindImage(i + 1, m_gbuffer.color_layers[i].image.view,
+        nullptr, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
+    bindings.BindEnd(m_lightingFragmentDescriptorSet, m_lightingFragmentDescriptorSetLayout);
   }
   else
   {
-    std::array image_infos {
-      VkDescriptorImageInfo {
-        .sampler = nullptr,
-        .imageView = m_gbuffer.color_layers[0].image.view,
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-      },
-      VkDescriptorImageInfo {
-        .sampler = nullptr,
-        .imageView = m_gbuffer.color_layers[1].image.view,
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-      },
-      VkDescriptorImageInfo {
-        .sampler = nullptr,
-        .imageView = m_gbuffer.color_layers[2].image.view,
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-      },
+    std::vector image_infos {
       VkDescriptorImageInfo {
         .sampler = nullptr,
         .imageView = m_gbuffer.depth_stencil_layer.image.view,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
       },
-      VkDescriptorImageInfo {
-        .sampler = nullptr,
-        .imageView = m_gbuffer.color_layers[3].image.view,
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-      },
     };
 
-    std::array<VkWriteDescriptorSet, image_infos.size()> writes;
+    for (auto & color_layer : m_gbuffer.color_layers)
+      image_infos.push_back({
+        .sampler = nullptr,
+        .imageView = color_layer.image.view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+      });
+
+    std::vector<VkWriteDescriptorSet> writes(image_infos.size());
 
     for (std::size_t i = 0; i < image_infos.size(); ++i) {
       writes[i] = VkWriteDescriptorSet{
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .dstSet = m_lightingFragmentDescriptorSet,
+        .dstSet = *m_lightingFragmentDescriptorSet,
         .dstBinding = static_cast<uint32_t>(i),
         .descriptorCount = 1,
         .descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT,
@@ -277,12 +265,12 @@ void SimpleRender::SetupShadingPipeline()
   vk_utils::GraphicsPipelineMaker maker;
 
   maker.LoadShaders(m_device, std::unordered_map<VkShaderStageFlagBits, std::string> {
-                                {VK_SHADER_STAGE_FRAGMENT_BIT, std::string{SHADING_FRAGMENT_SHADER_PATH} + ".spv"},
+                                {VK_SHADER_STAGE_FRAGMENT_BIT, std::string{SHADING_FRAGMENT_SHADER_PATH} + (uv_buffer ? ".uvbuf" : "") + ".spv"},
                                 {VK_SHADER_STAGE_VERTEX_BIT, std::string{SHADING_VERTEX_SHADER_PATH} + ".spv"}
                               });
 
   m_shadingPipeline.layout = maker.MakeLayout(m_device,
-    {m_lightingDescriptorSetLayout, m_lightingFragmentDescriptorSetLayout}, sizeof(pushConst));
+    {m_lightingDescriptorSetLayout, *m_lightingFragmentDescriptorSetLayout, m_shadowMapQuadDSLayout}, sizeof(pushConst));
 
   maker.SetDefaultState(m_width, m_height);
 
@@ -321,9 +309,30 @@ void SimpleRender::SetupShadowmapPipeline()
   bindings.BindBuffer(0, m_ubo, VK_NULL_HANDLE, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
   bindings.BindEnd(&m_shadowMapDescriptorSet, &m_shadowMapDescriptorSetLayout);
 
-  bindings.BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT);
-  bindings.BindImage(0, m_shadow_map.image.view, m_shadow_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-  bindings.BindEnd(&m_shadowMapQuadDS, &m_shadowMapQuadDSLayout);
+  // descriptors for shadowmap usage (images may be recreated, so DescriptorMaker cache won't work)
+  if (m_shadowMapQuadDS == VK_NULL_HANDLE) {
+    bindings.BindBegin(VK_SHADER_STAGE_FRAGMENT_BIT);
+    bindings.BindImage(0, m_shadow_map.image.view, m_shadow_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+    bindings.BindEnd(&m_shadowMapQuadDS, &m_shadowMapQuadDSLayout);
+  }
+  else {
+    VkDescriptorImageInfo image_info {
+      .sampler = m_shadow_map.sampler,
+      .imageView = m_shadow_map.image.view,
+      .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+    };
+
+    VkWriteDescriptorSet write {
+      .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+      .dstSet = m_shadowMapQuadDS,
+      .dstBinding = 0,
+      .descriptorCount = 1,
+      .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+      .pImageInfo = &image_info
+    };
+
+    vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+  }
 
   auto make_shadowmap_pipeline = [this](const std::unordered_map<VkShaderStageFlagBits, std::string>& shader_paths)
   {
@@ -460,15 +469,13 @@ void SimpleRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, size_t fr
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = m_swapchain.GetExtent();
 
-    VkClearValue clearValues[6] = {};
-    clearValues[0].color = {0.0f, 0.0f, 0.0f, 1.0f};
-    clearValues[1].color = {0.0f, 0.0f, 0.0f, 1.0f};
-    clearValues[2].color = {0.0f, 0.0f, 0.0f, 1.0f};
-    clearValues[3].color = {0.0f, 0.0f, 0.0f, 1.0f};
-    clearValues[4].depthStencil = {1.0f, 0};
-    clearValues[5].color = {0.f, 0.f, 0.f, 1.0f};
-    renderPassInfo.clearValueCount = 6;
-    renderPassInfo.pClearValues = &clearValues[0];
+    std::vector<VkClearValue> clearValues {m_gbuffer.color_layers.size() + 2};
+    clearValues[0].depthStencil = {1.0f, 0};
+    for (size_t i = 1; i < clearValues.size(); ++i)
+      clearValues[i].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+
+    renderPassInfo.clearValueCount = clearValues.size();
+    renderPassInfo.pClearValues = clearValues.data();
 
     vkCmdBeginRenderPass(a_cmdBuff, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     {
@@ -503,7 +510,7 @@ void SimpleRender::BuildCommandBufferSimple(VkCommandBuffer a_cmdBuff, size_t fr
     {
       vkCmdBindPipeline(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadingPipeline.pipeline);
 
-      std::array dsets {m_lightingDescriptorSet, m_lightingFragmentDescriptorSet};
+      std::array dsets {m_lightingDescriptorSet, *m_lightingFragmentDescriptorSet, m_shadowMapQuadDS};
       vkCmdBindDescriptorSets(a_cmdBuff, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadingPipeline.layout, 0,
         static_cast<uint32_t>(dsets.size()), dsets.data(), 0, VK_NULL_HANDLE);
 
@@ -563,11 +570,11 @@ void SimpleRender::RecreateSwapChain()
   m_presentationResources.queue = m_swapchain.CreateSwapChain(m_physicalDevice, m_device, m_surface, m_width, m_height,
     oldImagesNum, m_vsync);
 
-  CreateGBuffer();
   CreateShadowmap();
-  SetupGBufferPipeline();
-  SetupShadingPipeline();
   SetupShadowmapPipeline();
+  CreateGBuffer(m_uv_buffer);
+  SetupGBufferPipeline(m_uv_buffer);
+  SetupShadingPipeline(m_uv_buffer);
 
   m_frameFences.resize(m_framesInFlight);
   VkFenceCreateInfo fenceInfo = {};
@@ -598,6 +605,41 @@ void SimpleRender::Cleanup()
 
   ClearPipeline(m_gBufferPipeline);
   ClearPipeline(m_shadingPipeline);
+  ClearPipeline(m_shadowmapPipeline);
+
+  // Cleanup BRDF LUT and prefiltered maps
+  {
+    auto clearLayer = [this](GBufferLayer& layer)
+    {
+      if (layer.image.view != VK_NULL_HANDLE)
+      {
+        vkDestroyImageView(m_device, layer.image.view, nullptr);
+        layer.image.view = VK_NULL_HANDLE;
+      }
+
+      if (layer.image.image != VK_NULL_HANDLE)
+      {
+        vkDestroyImage(m_device, layer.image.image, nullptr);
+        layer.image.image = VK_NULL_HANDLE;
+      }
+
+      if (layer.image.mem != VK_NULL_HANDLE)
+      {
+        vkFreeMemory(m_device, layer.image.mem, nullptr);
+        layer.image.mem = nullptr;
+      }
+
+      if (layer.sampler != VK_NULL_HANDLE) {
+        vkDestroySampler(m_device, layer.sampler, VK_NULL_HANDLE);
+        layer.sampler = VK_NULL_HANDLE;
+      }
+    };
+
+    clearLayer(m_brdf_lut);
+    clearLayer(m_prefiltered_map);
+    clearLayer(m_irradiance_map);
+    clearLayer(m_env_map);
+  }
 
   if (m_presentationResources.imageAvailable != VK_NULL_HANDLE)
   {
@@ -666,9 +708,10 @@ void SimpleRender::ProcessInput(const AppInput &input)
     std::system("cd ../resources/shaders && python3 compile_simple_render_shaders.py");
 #endif
 
-    SetupGBufferPipeline();
-    SetupShadingPipeline();
-    SetupShadowmapPipeline();
+    /*SetupGBufferPipeline(m_uv_buffer);
+    SetupShadingPipeline(m_uv_buffer);
+    SetupShadowmapPipeline();*/
+    RecreateSwapChain();
   }
 }
 
@@ -692,12 +735,12 @@ void SimpleRender::UpdateView()
 
 void SimpleRender::LoadScene(const char* path, bool transpose_inst_matrices)
 {
-  m_pScnMgr->LoadSceneXML(path, transpose_inst_matrices);
+  m_pScnMgr->LoadScene(path);
 
   CreateUniformBuffer();
-  SetupGBufferPipeline();
-  SetupShadingPipeline();
   SetupShadowmapPipeline();
+  SetupGBufferPipeline(m_uv_buffer);
+  SetupShadingPipeline(m_uv_buffer);
 
   auto loadedCam = m_pScnMgr->GetCamera(0);
   m_cam.fov = loadedCam.fov;
@@ -756,11 +799,18 @@ void SimpleRender::SetupGUIElements()
     // ImGui::Checkbox("Animate light source color", &m_uniforms.animateLightColor);
     // ImGui::SliderFloat3("Light source position", m_uniforms.lightPos.M, -10.f, 10.f);
 
+    ImGui::BeginGroup();
     static_assert(sizeof(vg::vec3) == sizeof(m_light_direction));
     vg::vec3 temp;
     std::memcpy(&temp, &m_light_direction, sizeof(m_light_direction));
     ImGui::gizmo3D("Sun Direction", temp);
     std::memcpy(&m_light_direction, &temp, sizeof(m_light_direction));
+
+    bool old = m_uv_buffer;
+    ImGui::Checkbox("UV-buffer", &m_uv_buffer);
+    if (old != m_uv_buffer)
+      RecreateSwapChain();
+    ImGui::EndGroup();
 
     ImGui::SameLine();
     ImGui::BeginGroup();
@@ -797,7 +847,7 @@ void SimpleRender::SetupGUIElements()
     ImGui::End();
   }
 
-  ImGui::ShowDemoWindow();
+  //ImGui::ShowDemoWindow();
 
   // Rendering
   ImGui::Render();
@@ -909,7 +959,7 @@ void SimpleRender::ClearGBuffer()
   clearLayer(m_gbuffer.depth_stencil_layer);
 }
 
-void SimpleRender::CreateGBuffer()
+void SimpleRender::CreateGBuffer(bool uv_buffer)
 {
   auto makeLayer = [this](VkFormat format, VkImageUsageFlagBits usage) {
     GBufferLayer result{};
@@ -928,20 +978,32 @@ void SimpleRender::CreateGBuffer()
     return result;
   };
 
-  std::array layers {
-    // Normal
-    std::tuple{VK_FORMAT_R16G16B16A16_SFLOAT,
-      VkImageUsageFlagBits(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)},
-    // Tangent
-    std::tuple{VK_FORMAT_R16G16B16A16_SFLOAT,
-      VkImageUsageFlagBits(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)},
-    // Albedo
-    std::tuple{VK_FORMAT_R8G8B8A8_UNORM,
-      VkImageUsageFlagBits(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)},
-    // MetallicRoughness
-    std::tuple{VK_FORMAT_R8G8B8A8_UNORM,
-      VkImageUsageFlagBits(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)},
-  };
+  std::vector<std::tuple<VkFormat, VkImageUsageFlagBits>> layers;
+  if (!uv_buffer) {
+    layers = {
+      // Normal
+      { VK_FORMAT_R16G16_SFLOAT,
+        VkImageUsageFlagBits(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) },
+      // Albedo
+      { VK_FORMAT_R8G8B8A8_UNORM,
+        VkImageUsageFlagBits(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) },
+      // MetallicRoughness
+      { VK_FORMAT_R8G8_UNORM,
+        VkImageUsageFlagBits(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) },
+    };
+  } else {
+    layers = {
+      // Normal
+      { VK_FORMAT_R16G16_SFLOAT,
+        VkImageUsageFlagBits(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) },
+      // UV
+      { VK_FORMAT_R16G16_UNORM,
+        VkImageUsageFlagBits(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) },
+      // MaterialID
+      { VK_FORMAT_R16_UINT,
+        VkImageUsageFlagBits(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) },
+    };
+  }
 
   m_gbuffer.color_layers.reserve(layers.size());
 
@@ -967,29 +1029,29 @@ void SimpleRender::CreateGBuffer()
 
   // Renderpass
   {
-    std::array<VkAttachmentDescription, layers.size() + 2> attachmentDescs;
-
-    attachmentDescs.fill(VkAttachmentDescription {
-      .samples = VK_SAMPLE_COUNT_1_BIT,
-      .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-      .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-      .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-      .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-      .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-      .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    });
-
-    // Color GBuffer layers
-    for (std::size_t i = 0; i < layers.size(); ++i) {
-      attachmentDescs[i].format = m_gbuffer.color_layers[i].image.format;
-    }
+    std::vector<VkAttachmentDescription> attachmentDescs(layers.size() + 2,
+      {
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+      });
 
     // Depth layer
     {
-      auto& depth = attachmentDescs[layers.size()];
+      auto& depth = attachmentDescs[0];
       depth.format = m_gbuffer.depth_stencil_layer.image.format;
       depth.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     }
+
+    // Color GBuffer layers
+    for (std::size_t i = 1; i <= layers.size(); ++i) {
+      attachmentDescs[i].format = m_gbuffer.color_layers[i - 1].image.format;
+    }
+
     // Present image
     {
       auto& present = attachmentDescs[layers.size() + 1];
@@ -998,22 +1060,22 @@ void SimpleRender::CreateGBuffer()
       present.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     }
 
-    std::array<VkAttachmentReference, layers.size()> gBufferColorRefs;
-    for (std::size_t i = 0; i < layers.size(); ++i)
+    std::vector<VkAttachmentReference> gBufferColorRefs(layers.size());
+    for (std::size_t i = 1; i <= layers.size(); ++i)
     {
-      gBufferColorRefs[i] = VkAttachmentReference
+      gBufferColorRefs[i - 1] = VkAttachmentReference
         {static_cast<uint32_t>(i), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     }
 
     VkAttachmentReference depthRef
-      {static_cast<uint32_t>(layers.size()), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+      {static_cast<uint32_t>(0), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
 
     std::array resolveColorRefs {
       VkAttachmentReference
       {static_cast<uint32_t>(layers.size() + 1), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}
     };
 
-    std::array<VkAttachmentReference, layers.size() + 1> resolveInputRefs;
+    std::vector<VkAttachmentReference> resolveInputRefs(layers.size() + 1);
     for (std::size_t i = 0; i <= layers.size(); ++i)
     {
       resolveInputRefs[i] = VkAttachmentReference
@@ -1081,14 +1143,18 @@ void SimpleRender::CreateGBuffer()
   m_frameBuffers.resize(m_swapchain.GetImageCount());
   for (std::size_t i = 0; i < m_frameBuffers.size(); ++i)
   {
-    std::array<VkImageView, layers.size() + 2> attachments;
-    for (std::size_t j = 0; j < layers.size(); ++j)
-    {
-      attachments[j] = m_gbuffer.color_layers[j].image.view;
-    }
+    std::vector<VkImageView> attachments(layers.size() + 2);
 
-    attachments[layers.size()] = m_gbuffer.depth_stencil_layer.image.view;
-    attachments.back() = m_swapchain.GetAttachment(i).view;
+    {
+      attachments[0] = m_gbuffer.depth_stencil_layer.image.view;
+
+      for (std::size_t j = 1; j <= layers.size(); ++j)
+      {
+        attachments[j] = m_gbuffer.color_layers[j - 1].image.view;
+      }
+
+      attachments.back() = m_swapchain.GetAttachment(i).view;
+    }
 
     VkFramebufferCreateInfo fbufCreateInfo {
       .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -1112,7 +1178,7 @@ void SimpleRender::ClearShadowmap()
     m_shadowMapRenderPass = VK_NULL_HANDLE;
   }
 
-  if (m_shadowMapRenderPass != VK_NULL_HANDLE)
+  if (m_shadowMapFrameBuffer != VK_NULL_HANDLE)
   {
     vkDestroyFramebuffer(m_device, m_shadowMapFrameBuffer, nullptr);
     m_shadowMapFrameBuffer = VK_NULL_HANDLE;

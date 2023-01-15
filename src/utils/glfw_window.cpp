@@ -187,7 +187,7 @@ void setupImGuiContext(GLFWwindow* a_window)
 
 void mainLoop(std::shared_ptr<IRender> &app, GLFWwindow* window, bool displayGUI)
 {
-  constexpr int NAverage = 60;
+  constexpr int NAverage = 1000;
   double avgTime = 0.0;
   int avgCounter = 0;
   int currCam    = 0;

@@ -125,8 +125,8 @@ protected:
   VkDescriptorSet m_lightingDescriptorSet = VK_NULL_HANDLE;
   VkDescriptorSetLayout m_lightingDescriptorSetLayout = VK_NULL_HANDLE;
 
-  VkDescriptorSet m_lightingFragmentDescriptorSet = VK_NULL_HANDLE;
-  VkDescriptorSetLayout m_lightingFragmentDescriptorSetLayout = VK_NULL_HANDLE;
+  VkDescriptorSet* m_lightingFragmentDescriptorSet = nullptr;
+  VkDescriptorSetLayout* m_lightingFragmentDescriptorSetLayout = nullptr;
 
   VkDescriptorSet m_shadowMapDescriptorSet             = VK_NULL_HANDLE;
   VkDescriptorSetLayout m_shadowMapDescriptorSetLayout = VK_NULL_HANDLE;
@@ -150,7 +150,7 @@ protected:
   uint32_t m_width  = 1024u;
   uint32_t m_height = 1024u;
   uint32_t m_framesInFlight  = 2u;
-  bool m_vsync = true;
+  bool m_vsync = false;
 
   VkPhysicalDeviceFeatures m_enabledDeviceFeatures = {};
   std::vector<const char*> m_deviceExtensions      = {};
@@ -171,8 +171,8 @@ protected:
 
   bool m_shadowMapDebugQuadEnabled = false;
   std::unique_ptr<vk_utils::IQuad> m_shadowMapDebugQuad;
-  VkDescriptorSet       m_shadowMapQuadDS;
-  VkDescriptorSetLayout m_shadowMapQuadDSLayout = nullptr;
+  VkDescriptorSet       m_shadowMapQuadDS = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_shadowMapQuadDSLayout = VK_NULL_HANDLE;
 
   vec3 m_light_direction = LiteMath::normalize({0., -1., 0.1});
   float m_light_radius = 100;
@@ -184,8 +184,8 @@ protected:
   void BuildCommandBufferSimple(VkCommandBuffer cmdBuff, size_t frameBufferIndex);
   void AddCmdsShadowmapPass(VkCommandBuffer a_cmdBuff, size_t frameBufferIndex);
 
-  void SetupGBufferPipeline();
-  void SetupShadingPipeline();
+  void SetupGBufferPipeline(bool uv_buffer);
+  void SetupShadingPipeline(bool uv_buffer);
   void SetupShadowmapPipeline();
   void CleanupPipelineAndSwapchain();
   void RecreateSwapChain();
@@ -200,7 +200,7 @@ protected:
   void SetupValidationLayers();
 
   void ClearGBuffer();
-  void CreateGBuffer();
+  void CreateGBuffer(bool uv_buffer);
 
   void ClearShadowmap();
   void CreateShadowmap();
@@ -217,6 +217,10 @@ protected:
   GBufferLayer m_env_map;
   GBufferLayer m_irradiance_map;
   GBufferLayer m_prefiltered_map;
+
+  bool m_uv_buffer = false;
+  std::pair<VkDescriptorSet, VkDescriptorSetLayout> m_lightingFragmentDescriptorSetReference = { VK_NULL_HANDLE, VK_NULL_HANDLE };
+  std::pair<VkDescriptorSet, VkDescriptorSetLayout> m_lightingFragmentDescriptorSetUVBuffer = { VK_NULL_HANDLE, VK_NULL_HANDLE };
 };
 
 

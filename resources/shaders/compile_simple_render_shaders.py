@@ -15,3 +15,10 @@ if __name__ == '__main__':
 
     for shader in shader_list:
         subprocess.run([glslang_cmd, "-V", shader, "-o", "{}.spv".format(shader)])
+
+    shader_list = [
+        "gbuffer.frag", "shading.frag"
+    ]
+
+    for shader in shader_list:
+        subprocess.run([glslang_cmd, "-V", "-DUV_BUFFER", shader, "-o", "{}.uvbuf.spv".format(shader)])

@@ -25,7 +25,7 @@ bool SceneManager::LoadScene(const std::string &scenePath)
 {
   std::string ext = scenePath.substr(scenePath.find_last_of('.'), scenePath.size());
 
-  if(ext == ".gltf")
+  if(ext == ".gltf" || ext == ".glb")
     return LoadSceneGLTF(scenePath);
   else if(ext == ".xml")
     return LoadSceneXML(scenePath, false);
@@ -162,12 +162,23 @@ bool SceneManager::LoadSceneGLTF(const std::string &scenePath)
   else
     sceneFolder = "./";
 
-  bool loaded = gltfContext.LoadASCIIFromFile(&gltfModel, &error, &warning, scenePath);
+  std::string ext = scenePath.substr(scenePath.find_last_of('.'), scenePath.size());
+  bool loaded;
+  if (ext == ".gltf")
+    loaded = gltfContext.LoadASCIIFromFile(&gltfModel, &error, &warning, scenePath);
+  else
+    loaded = gltfContext.LoadBinaryFromFile(&gltfModel, &error, &warning, scenePath);
+
+  if (!warning.empty()) {
+    std::stringstream ss;
+    ss << "glTF scene loading warning: " << warning;
+    vk_utils::logWarning(ss.str());
+  }
 
   if(!loaded)
   {
     std::stringstream ss;
-    ss << "Cannot load glTF scene from: " << scenePath;
+    ss << "Cannot load glTF scene from " << scenePath << ": " << error;
     vk_utils::logWarning(ss.str());
 
     return false;
