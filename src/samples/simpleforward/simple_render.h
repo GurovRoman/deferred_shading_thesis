@@ -218,6 +218,8 @@ protected:
   GBufferLayer m_irradiance_map;
   GBufferLayer m_prefiltered_map;
 
+  GBufferLayer m_blue_noise;
+
   bool m_uv_buffer = false;
   std::pair<VkDescriptorSet, VkDescriptorSetLayout> m_lightingFragmentDescriptorSetReference = { VK_NULL_HANDLE, VK_NULL_HANDLE };
   std::pair<VkDescriptorSet, VkDescriptorSetLayout> m_lightingFragmentDescriptorSetUVBuffer = { VK_NULL_HANDLE, VK_NULL_HANDLE };

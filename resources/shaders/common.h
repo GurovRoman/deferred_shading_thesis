@@ -40,6 +40,7 @@ struct UniformParams
   mat4 lightMatrix;
   vec3 baseColor;
   float lightIntensity;
+  vec3 lightPosition;
   float exposure;
   float time;
   float screenWidth;

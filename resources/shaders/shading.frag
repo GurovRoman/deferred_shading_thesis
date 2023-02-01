@@ -17,9 +17,10 @@ layout(binding = 0) uniform AppData
 layout (binding = 1) uniform samplerCube samplerIrradiance;
 layout (binding = 2) uniform samplerCube prefilteredMap;
 layout (binding = 3) uniform sampler2D samplerBRDFLUT;
+layout (binding = 4) uniform sampler2D samplerBlueNoise;
 #ifdef UV_BUFFER
-layout (binding = 4, std430) buffer Materials { MaterialData_pbrMR materials[]; };
-layout (binding = 5) uniform sampler2D all_textures[MAX_TEXTURES];
+layout (binding = 5, std430) buffer Materials { MaterialData_pbrMR materials[]; };
+layout (binding = 6) uniform sampler2D all_textures[MAX_TEXTURES];
 #endif
 
 layout (input_attachment_index = 0, set = 1, binding = 0) uniform subpassInput inDepth;
@@ -151,6 +152,8 @@ struct PBRData {
     vec3 albedo;
     float metallic;
     float roughness;
+
+    vec4 blueNoise;
 };
 
 // Normal Distribution function --------------------------------------
@@ -203,6 +206,9 @@ vec3 getIBLContribution(
 
 // Specular BRDF composition --------------------------------------------
 
+vec3 LIGHT_POS = Params.lightPosition;
+const vec3 LIGHT_COLOR = vec3(0.5f, 0.2f, 1.f);
+
 vec3 BRDF(PBRData d, float shadowmap_visibility)
 {
     vec3 f0 = vec3(0.04);
@@ -214,7 +220,7 @@ vec3 BRDF(PBRData d, float shadowmap_visibility)
 
 
     // Light color fixed
-    const vec3 lightColor = vec3(1.f);
+    const vec3 lightColor = LIGHT_COLOR;
 
     vec3 color = vec3(0.0);
 
@@ -234,12 +240,71 @@ vec3 BRDF(PBRData d, float shadowmap_visibility)
         color += Params.lightIntensity * (diffuseContrib + spec) * d.dotNL * lightColor * shadowmap_visibility;
     }
 
-    vec3 reflection = -normalize(reflect(d.V, d.N));
-    reflection.y *= -1.0f;
-    color += getIBLContribution(diffuseColor, specularColor, d.dotNV, d.roughness, d.N, reflection)
-        * (1 - (1 - shadowmap_visibility) * (1 - Params.IBLShadowedRatio));
+    //vec3 reflection = -normalize(reflect(d.V, d.N));
+    //reflection.y *= -1.0f;
+    //color += getIBLContribution(diffuseColor, specularColor, d.dotNV, d.roughness, d.N, reflection)
+    //    * (1 - (1 - shadowmap_visibility) * (1 - Params.IBLShadowedRatio));
 
     return color;
+}
+
+
+float DENSITY = 0.1;
+uint PRIMARY_STEPS = 50;
+uint SECONDARY_STEPS = 20;
+
+float f(vec3 pos) {
+    return min(1, exp((0.5-pos.y)*5));
+}
+
+float marchTransparency(
+  vec3 begin, const vec3 end,
+  const uint samples, const float step_offset_ratio) {
+    float acc_transparency = 0.;
+
+    vec3 step_delta = (end - begin) / samples;
+
+    begin += step_delta * step_offset_ratio;
+
+    float step_length = length(step_delta);
+    for (int i = 0; i < samples; ++i) {
+        vec3 pos = begin + step_delta * i;
+        float opacity = f(pos) * step_length;
+        acc_transparency -= opacity;
+    }
+    return exp(acc_transparency);
+}
+
+vec4 marchRay(PBRData pbrData, vec3 begin, vec3 end) {
+    vec3 final_color = vec3(0.);
+    float acc_transparency = 1.;
+
+    const float lightIntensity = Params.lightIntensity;
+
+    vec3 step_delta = (end - begin) / PRIMARY_STEPS;
+    float step_length = length(step_delta);
+
+    begin += step_delta * pbrData.blueNoise.r;
+
+    for (int i = 0; i < PRIMARY_STEPS; ++i) {
+        vec3 pos = begin + step_delta * i;
+        float density = f(pos);
+
+        float opacity = density * step_length;
+
+        float volume_shadow = marchTransparency(pos, LIGHT_POS, SECONDARY_STEPS, pbrData.blueNoise.r);
+        float opaque_shadow = 0;//calculateShadowFromMap(world_pos, sunShadowmap, 0);
+        float shadowTransparency = clamp(volume_shadow - opaque_shadow, 0, 1);
+
+        vec3 intensity = vec3(0.0) + shadowTransparency;
+
+        vec3 toLight = LIGHT_POS - pos;
+        vec3 color = intensity * LIGHT_COLOR * lightIntensity / dot(toLight, toLight);
+
+        final_color += color * min(1.f, opacity) * acc_transparency;
+        acc_transparency *= exp(-opacity);
+    }
+    return vec4(final_color, 1 - acc_transparency);
 }
 
 void main()
@@ -263,14 +328,8 @@ void main()
 
     mat4 mViewInv = inverse(Params.view);
 
-    pbrData.V = normalize((mViewInv * vec4(0., 0., 0., 1.)).xyz - position);
-
-    if (screenSpacePos.z == 1.) {
-        out_fragColor = textureLod(prefilteredMap, toSky(pbrData.V * vec3(-1, 1, -1)), 0);
-        if ((Params.debugFlags & 4) == 0)
-            out_fragColor = vec4(tonemapLottes(out_fragColor.xyz * Params.exposure), 1.);
-        return;
-    }
+    vec3 eye = (mViewInv * vec4(0., 0., 0., 1.)).xyz;
+    pbrData.V = normalize(eye - position);
 
 #ifndef UV_BUFFER
     pbrData.N = decode_normal(subpassLoad(inNormal).xy);
@@ -299,14 +358,14 @@ void main()
     mat4 lightMat = Params.lightMatrix;
 
     // from lightspace to worldspace
-    vec3 lightDir = -normalize(transpose(mat3(lightMat)) * vec3(0., 0., 1.));
+    vec3 lightDir = normalize(LIGHT_POS - position);
 
     //if (gl_FragCoord.x == 0.5 && gl_FragCoord.y == 0.5)
     //    debugPrintfEXT("lightDir: %v3f\n", lightDir.xyz);
 
 
-    vec3 lightSpacePos = (lightMat * vec4(position, 1.)).xyz;
-    float shadowmap_visibility = calculateShadow(lightSpacePos, 0.001f);
+    //vec3 lightSpacePos = (lightMat * vec4(position, 1.)).xyz;
+    //float shadowmap_visibility = calculateShadow(lightSpacePos, 0.001f);
     //shadowmap_visibility = texture(shadowmapTex, lightSpacePos * vec3(0.5f, 0.5f, 1.f) + vec3(0.5f, 0.5f, -0.010f));
 
 
@@ -320,9 +379,31 @@ void main()
     pbrData.dotLH = clamp(dot(pbrData.L, H), 0.0, 1.0);
     pbrData.dotNH = clamp(dot(pbrData.N, H), 0.0, 1.0);
 
-    // Specular contribution
-    vec3 color = BRDF(pbrData, shadowmap_visibility);
+    pbrData.blueNoise = textureLod(samplerBlueNoise, gl_FragCoord.xy / textureSize(samplerBlueNoise, 0), 0);
 
+    vec3 color;
+    if (screenSpacePos.z == 1.) {
+        color = textureLod(prefilteredMap, toSky(pbrData.V * vec3(-1, 1, -1)), 0).rgb;
+        if ((Params.debugFlags & 4) == 0)
+            color = tonemapLottes(color * Params.exposure);
+        position = eye - pbrData.V * 100;
+    } else {
+        vec3 toLight = LIGHT_POS - position;
+        float lightDistanceSq = dot(toLight, toLight);
+        float fogLightTransparency = 1 / lightDistanceSq;
+
+        if ((Params.debugFlags & 128) == 0) {
+            fogLightTransparency *= marchTransparency(position, LIGHT_POS, SECONDARY_STEPS, pbrData.blueNoise.r);
+        }
+
+        // Specular contribution
+        color = BRDF(pbrData, fogLightTransparency);
+    }
+
+    if ((Params.debugFlags & 64) == 0) {
+        vec4 fog = marchRay(pbrData, eye, position);
+        color = fog.rgb + color * (1. - fog.a);
+    }
 
     if ((Params.debugFlags & 4) == 0)
         out_fragColor = vec4(tonemapLottes(color * Params.exposure), 1.);

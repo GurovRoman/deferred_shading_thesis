@@ -208,10 +208,11 @@ void SimpleRender::SetupShadingPipeline(bool uv_buffer)
   bindings.BindImage(1, m_irradiance_map.image.view, m_irradiance_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   bindings.BindImage(2, m_prefiltered_map.image.view, m_prefiltered_map.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   bindings.BindImage(3, m_brdf_lut.image.view, m_brdf_lut.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  bindings.BindImage(4, m_blue_noise.image.view, m_blue_noise.sampler, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
   if (uv_buffer)
   {
-    bindings.BindBuffer(4, m_pScnMgr->GetMaterialsBuffer());
-    bindings.BindImageArray(5, m_pScnMgr->GetTextureViews(), m_pScnMgr->GetTextureSamplers());
+    bindings.BindBuffer(5, m_pScnMgr->GetMaterialsBuffer());
+    bindings.BindImageArray(6, m_pScnMgr->GetTextureViews(), m_pScnMgr->GetTextureSamplers());
   }
   bindings.BindEnd(&m_lightingDescriptorSet, &m_lightingDescriptorSetLayout);
 
@@ -382,6 +383,7 @@ void SimpleRender::CreateUniformBuffer()
   m_uniforms.exposure = 1.;
   m_uniforms.IBLShadowedRatio = 1.;
   m_uniforms.envMapRotation = 0.;
+  m_uniforms.lightPosition = {0., 2., 0.};
 
   UpdateUniformBuffer(0.0f);
 }
@@ -639,6 +641,7 @@ void SimpleRender::Cleanup()
     clearLayer(m_prefiltered_map);
     clearLayer(m_irradiance_map);
     clearLayer(m_env_map);
+    clearLayer(m_blue_noise);
   }
 
   if (m_presentationResources.imageAvailable != VK_NULL_HANDLE)
@@ -806,10 +809,12 @@ void SimpleRender::SetupGUIElements()
     ImGui::gizmo3D("Sun Direction", temp);
     std::memcpy(&m_light_direction, &temp, sizeof(m_light_direction));
 
-    bool old = m_uv_buffer;
-    ImGui::Checkbox("UV-buffer", &m_uv_buffer);
-    if (old != m_uv_buffer)
-      RecreateSwapChain();
+    {
+      bool old = m_uv_buffer;
+      ImGui::Checkbox("UV-buffer", &m_uv_buffer);
+      if (old != m_uv_buffer)
+        RecreateSwapChain();
+    }
     ImGui::EndGroup();
 
     ImGui::SameLine();
@@ -837,10 +842,21 @@ void SimpleRender::SetupGUIElements()
     ImGui::CheckboxFlags("##debugflag7", &m_uniforms.debugFlags, 1 << 6); ImGui::SameLine();
     ImGui::CheckboxFlags("##debugflag8", &m_uniforms.debugFlags, 1 << 7);
 
+    {
+      ImGui::SameLine();
+      ImGui::Text("VSync:"); ImGui::SameLine();
+      bool old = m_vsync;
+      ImGui::Checkbox("##vsync", &m_vsync);
+      if (old != m_vsync)
+        RecreateSwapChain();
+    }
+
     ImGui::PushItemWidth(ImGui::CalcItemWidth() / 2);
     ImGui::SliderFloat("Metallic", &m_uniforms.debugMetallic, 0., 1., "%.2f"); ImGui::SameLine();
     ImGui::SliderFloat("Roughness", &m_uniforms.debugRoughness, 0., 1., "%.2f");
     ImGui::PopItemWidth();
+
+    ImGui::DragFloat3("Light pos", reinterpret_cast<float *>(&m_uniforms.lightPosition), 0.01);
 
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
@@ -1558,6 +1574,17 @@ GBufferLayer SimpleRender::loadEnvMap(const std::string& filename,
   VkImageUsageFlags imageUsageFlags,
   VkImageLayout imageLayout)
 {
+  {
+    auto info = getImageInfo("../resources/textures/blue_noise_LDR_RGBA_0.png");
+    std::vector<unsigned char> image_data = loadImageLDR(info);
+
+    m_blue_noise.image = allocateColorTextureFromDataLDR(m_device, m_physicalDevice, reinterpret_cast<unsigned char*>(image_data.data()), info.width, info.height, 1,
+      VK_FORMAT_R8G8B8A8_UNORM, m_pScnMgr->GetCopyHelper(), 4);
+
+    m_blue_noise.sampler = vk_utils::createSampler(m_device, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+      VK_BORDER_COLOR_INT_TRANSPARENT_BLACK, 1);
+  }
+
   auto info = getImageInfo(filename);
   std::vector<float> image_data = loadImageHDR(info);
   if (false) {
