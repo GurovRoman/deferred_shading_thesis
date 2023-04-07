@@ -27,10 +27,11 @@ typedef float4x4     mat4;
 
 #define MAX_TEXTURES 256
 
+#define SSAA_RATIO 1
+
 struct PushConst
 {
-  mat4 model;
-  uint instanceID;
+  uint meshID;
 };
 
 struct UniformParams

@@ -20,6 +20,8 @@ layout(binding = 0, set = 0) uniform AppData
     UniformParams Params;
 };
 
+layout (binding = 5, set = 0) buffer InstanceMatrices { mat4 instanceMatrices[]; };
+
 layout (location = 0) out VS_OUT
 {
     vec3 sNorm;
@@ -33,7 +35,7 @@ void main(void)
     const vec3 wNorm = DecodeNormal(floatBitsToUint(vPosNorm.w));
     const vec3 wTang = DecodeNormal(floatBitsToUint(vTexCoordAndTang.z));
 
-    mat4 modelView = Params.view * params.model;
+    mat4 modelView = Params.view * instanceMatrices[gl_InstanceIndex];
 
     mat3 normalModelView = transpose(inverse(mat3(modelView)));
 

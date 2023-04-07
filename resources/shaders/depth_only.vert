@@ -19,6 +19,8 @@ layout(binding = 0, set = 0) uniform AppData
     UniformParams Params;
 };
 
+layout (binding = 1, set = 0) buffer InstanceMatrices { mat4 instanceMatrices[]; };
+
 layout (location = 0 ) out VS_OUT
 {
     vec2 texCoord;
@@ -28,5 +30,5 @@ void main(void)
 {
     vOut.texCoord = vTexCoordAndTang.xy;
 
-    gl_Position   = Params.lightMatrix * params.model * vec4(vPosNorm.xyz, 1.0);
+    gl_Position   = Params.lightMatrix * instanceMatrices[gl_InstanceIndex] * vec4(vPosNorm.xyz, 1.0);
 }

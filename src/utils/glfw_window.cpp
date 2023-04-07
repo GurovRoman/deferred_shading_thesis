@@ -155,7 +155,7 @@ GLFWwindow* initWindow(int width, int height, GLFWkeyfun keyboard, GLFWcursorpos
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-  GLFWwindow *window = glfwCreateWindow(width, height, "GLFW window", nullptr, nullptr);
+  GLFWwindow *window = glfwCreateWindow(width, height, "vk", nullptr, nullptr);
 
   glfwSetKeyCallback        (window, keyboard);
   glfwSetCursorPosCallback  (window, mouseMove);
@@ -190,9 +190,7 @@ void mainLoop(std::shared_ptr<IRender> &app, GLFWwindow* window, bool displayGUI
   constexpr int NAverage = 1000;
   double avgTime = 0.0;
   int avgCounter = 0;
-  int currCam    = 0;
 
-  g_appInput.cams[0] = app->GetCurrentCamera();
   double lastTime = glfwGetTime();
   while (!glfwWindowShouldClose(window))
   {
@@ -202,14 +200,12 @@ void mainLoop(std::shared_ptr<IRender> &app, GLFWwindow* window, bool displayGUI
     
     g_appInput.clearKeys();
     glfwPollEvents();
-    
-    if(g_appInput.keyReleased[GLFW_KEY_L])
-      currCam = 1 - currCam;
 
-    UpdateCamera(window, g_appInput.cams[currCam], static_cast<float>(diffTime));
-    
+    g_appInput.cams[0] = app->GetCurrentCamera();
+    UpdateCamera(window, g_appInput.cams[0], static_cast<float>(diffTime));
+    app->UpdateCamera(g_appInput.cams, 1);
+
     app->ProcessInput(g_appInput);
-    app->UpdateCamera(g_appInput.cams, 2);
     if (!glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
       if (displayGUI)
         app->DrawFrame(static_cast<float>(thisTime), DrawMode::WITH_GUI);
@@ -229,7 +225,9 @@ void mainLoop(std::shared_ptr<IRender> &app, GLFWwindow* window, bool displayGUI
       std::stringstream strout;
       strout << "FPS = " << int( 1.0/(avgTime/double(NAverage)) ) << " " << title;
 
-      glfwSetWindowTitle(window, strout.str().c_str());
+      static auto s = strout.str();
+
+      //glfwSetWindowTitle(window, s.c_str());
       avgTime    = 0.0;
       avgCounter = 0;
     }

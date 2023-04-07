@@ -26,6 +26,7 @@ struct GBuffer
 {
   std::vector<GBufferLayer> color_layers;
   GBufferLayer depth_stencil_layer;
+  GBufferLayer finalImage;
   VkRenderPass renderpass {VK_NULL_HANDLE};
 };
 
@@ -35,8 +36,10 @@ public:
   const std::string GBUFFER_VERTEX_SHADER_PATH = "../resources/shaders/gbuffer.vert";
   const std::string GBUFFER_FRAGMENT_SHADER_PATH = "../resources/shaders/gbuffer.frag";
 
-  const std::string SHADING_VERTEX_SHADER_PATH = "../resources/shaders/shading.vert";
-  const std::string SHADING_FRAGMENT_SHADER_PATH = "../resources/shaders/shading.frag";
+  const std::string RESOLVE_VERTEX_SHADER_PATH = "../resources/shaders/resolve.vert";
+  const std::string RESOLVE_FRAGMENT_SHADER_PATH = "../resources/shaders/resolve.frag";
+
+  const std::string POSTFX_FRAGMENT_SHADER_PATH = "../resources/shaders/postfx.frag";
 
   const std::string SHADOWMAP_VERTEX_SHADER_PATH = "../resources/shaders/depth_only.vert";
   const std::string SHADOWMAP_FRAGMENT_SHADER_PATH = "../resources/shaders/depth_only.frag";
@@ -44,8 +47,8 @@ public:
   SimpleRender(uint32_t a_width, uint32_t a_height);
   ~SimpleRender()  { Cleanup(); };
 
-  inline uint32_t     GetWidth()      const override { return m_width; }
-  inline uint32_t     GetHeight()     const override { return m_height; }
+  inline uint32_t     GetWidth()      const override { return m_windowWidth; }
+  inline uint32_t     GetHeight()     const override { return m_windowHeight; }
   inline VkInstance   GetVkInstance() const override { return m_instance; }
   void InitVulkan(const char** a_instanceExtensions, uint32_t a_instanceExtensionsCount, uint32_t a_deviceId) override;
 
@@ -53,7 +56,7 @@ public:
 
   void ProcessInput(const AppInput& input) override;
   void UpdateCamera(const Camera* cams, uint32_t a_camsCount) override;
-  Camera GetCurrentCamera() override {return m_cam;}
+  Camera GetCurrentCamera() override {return m_cam[m_cam_ix];}
   void UpdateView();
 
   void LoadScene(const char *path, bool transpose_inst_matrices) override;
@@ -131,6 +134,9 @@ protected:
   VkDescriptorSet m_shadowMapDescriptorSet             = VK_NULL_HANDLE;
   VkDescriptorSetLayout m_shadowMapDescriptorSetLayout = VK_NULL_HANDLE;
 
+  VkDescriptorSet m_postFxDescriptorSet             = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_postFxDescriptorSetLayout = VK_NULL_HANDLE;
+
   std::shared_ptr<vk_utils::DescriptorMaker> m_pBindings = nullptr;
   vk_utils::DescriptorMaker& GetDescMaker();
 
@@ -146,13 +152,20 @@ protected:
   void DrawFrameWithGUI();
   //
 
-  Camera   m_cam;
-  uint32_t m_width  = 1024u;
-  uint32_t m_height = 1024u;
+  std::vector<Camera> m_cam;
+  size_t m_cam_ix = 0;
+  uint32_t m_windowWidth;
+  uint32_t m_windowHeight;
+
+  uint8_t m_SSMultiplier = SSAA_RATIO;
+  uint32_t m_width;
+  uint32_t m_height;
+
   uint32_t m_framesInFlight  = 2u;
   bool m_vsync = false;
 
   VkPhysicalDeviceFeatures m_enabledDeviceFeatures = {};
+  VkPhysicalDeviceDescriptorIndexingFeatures m_indexingDeviceFeatures = {};
   std::vector<const char*> m_deviceExtensions      = {};
   std::vector<const char*> m_instanceExtensions    = {};
 
@@ -162,6 +175,10 @@ protected:
   std::shared_ptr<SceneManager> m_pScnMgr;
 
   GBuffer m_gbuffer;
+  VkFramebuffer m_mainPassFrameBuffer;
+
+  VkRenderPass m_postFxRenderPass;
+  pipeline_data_t m_postFxPipeline;
 
   GBufferLayer m_shadow_map;
   VkFramebuffer m_shadowMapFrameBuffer;
@@ -187,6 +204,7 @@ protected:
   void SetupGBufferPipeline(bool uv_buffer);
   void SetupShadingPipeline(bool uv_buffer);
   void SetupShadowmapPipeline();
+  void SetupPostfxPipeline();
   void CleanupPipelineAndSwapchain();
   void RecreateSwapChain();
 
@@ -205,8 +223,13 @@ protected:
   void ClearShadowmap();
   void CreateShadowmap();
 
+  void ClearPostFx();
+  void CreatePostFx();
+
   void generateBRDFLUT();
   void generateCubemaps();
+
+  void set_debug_name(uint64_t object, VkObjectType object_type, const char* name);
 
   GBufferLayer loadEnvMap(const std::string& filename,
     VkFormat format,

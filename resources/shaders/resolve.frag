@@ -1,7 +1,8 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_GOOGLE_include_directive : require
-#extension GL_EXT_debug_printf : enable
+#extension GL_EXT_nonuniform_qualifier : enable
+//#extension GL_EXT_debug_printf : enable
 
 #include "common.h"
 #include "normal_packing.glsl"
@@ -19,7 +20,7 @@ layout (binding = 2) uniform samplerCube prefilteredMap;
 layout (binding = 3) uniform sampler2D samplerBRDFLUT;
 #ifdef UV_BUFFER
 layout (binding = 4, std430) buffer Materials { MaterialData_pbrMR materials[]; };
-layout (binding = 5) uniform sampler2D all_textures[MAX_TEXTURES];
+layout (binding = 5) uniform sampler2D all_textures[];
 #endif
 
 layout (input_attachment_index = 0, set = 1, binding = 0) uniform subpassInput inDepth;
@@ -30,6 +31,9 @@ layout (input_attachment_index = 3, set = 1, binding = 3) uniform subpassInput i
 #else
 layout (input_attachment_index = 2, set = 1, binding = 2) uniform subpassInput inUV;
 layout (input_attachment_index = 3, set = 1, binding = 3) uniform usubpassInput inMatID;
+layout (input_attachment_index = 4, set = 1, binding = 4) uniform subpassInput inTextureLod;
+layout (input_attachment_index = 5, set = 1, binding = 5) uniform subpassInput inGrad;
+layout (input_attachment_index = 6, set = 1, binding = 6) uniform subpassInput inGradFull;
 #endif
 
 layout (binding = 0, set = 2) uniform sampler2DShadow shadowmapTex;
@@ -339,6 +343,27 @@ void main()
     if ((Params.debugFlags & 1) > 0) {
         out_fragColor = vec4(pbrData.N, 1.);
     }
+
+    if ((Params.debugFlags & 16) > 0) {
+        out_fragColor = vec4(pbrData.albedo, 1.);
+    }
+
+#ifdef UV_BUFFER
+    if ((Params.debugFlags & 128) > 0) {
+        vec4 dUV = (subpassLoad(inGrad));
+        dUV = (dUV * dUV) * sign(dUV);
+
+        vec4 dUVFull = subpassLoad(inGradFull);
+        vec4 dUVAuto = vec4(dFdx(subpassLoad(inUV).xy), dFdy(subpassLoad(inUV).xy));
+
+        if ((Params.debugFlags & 64) > 0) {
+            out_fragColor = abs(dUV);
+        } else {
+            out_fragColor = abs(dUV - dUVFull) * 1000;
+        }
+        return;
+    }
+#endif
 
     out_fragColor = vec4(fromLinear(out_fragColor.rgb), out_fragColor.a);
 }

@@ -1,6 +1,8 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_nonuniform_qualifier : enable
+//#extension GL_EXT_debug_printf : enable
 
 #include "common.h"
 #include "normal_packing.glsl"
@@ -29,28 +31,34 @@ layout (location = 2) out vec2 outMetRough;
 #else
 layout (location = 1) out vec2 outUV;
 layout (location = 2) out uint outMaterialID;
+layout (location = 3) out float outTextureLod;
+layout (location = 4) out vec4 outGrad;
+layout (location = 5) out vec4 outGradFull;
 #endif
 
 layout (binding = 1, set = 0, std430) buffer Materials { MaterialData_pbrMR materials[]; };
 layout (binding = 2, set = 0, std430) buffer MaterialsID { uint matID[]; };
-layout (binding = 3, set = 0) uniform sampler2D all_textures[MAX_TEXTURES];
+layout (binding = 3, set = 0) uniform sampler2D all_textures[];
 layout (binding = 4, set = 0) buffer MeshInfos { uvec2 o[]; } infos;
 
+#ifndef UV_BUFFER
 #include "texture_data.glsl"
+#endif
 
 void main()
 {
-    const uint offset = infos.o[params.instanceID].x;
-    const uint matIdx = matID[gl_PrimitiveID + offset / 3];
-
+    const uint meshOffset = infos.o[params.meshID].x;
+    const uint matIdx = matID[meshOffset / 3 + gl_PrimitiveID];
 
     // Alpha testing has to be done here anyway
     MaterialData_pbrMR material = materials[matIdx];
-    float alpha = texture(all_textures[material.baseColorTexId], surf.texCoord).a;
+    if (material.baseColorTexId >= 0) {
+        float alpha = texture(all_textures[material.baseColorTexId], surf.texCoord).a;
 
-    if (material.alphaMode == 1) {
-        if (alpha < material.alphaCutoff) {
-            discard;
+        if (material.alphaMode == 1) {
+            if (alpha < material.alphaCutoff) {
+                discard;
+            }
         }
     }
 
@@ -72,5 +80,16 @@ void main()
     outNormal = encode_normal(surf.sNorm);
     outUV = mod(surf.texCoord, vec2(1.0));
     outMaterialID = matIdx;
+
+    if (material.baseColorTexId >= 0) {
+        float max_lvl = textureQueryLevels(all_textures[material.baseColorTexId]) - 1;
+        outTextureLod = textureQueryLod(all_textures[material.baseColorTexId], surf.texCoord).x / max_lvl;
+    } else {
+        outTextureLod = 0;
+    }
+
+    vec4 grad = vec4(dFdx(surf.texCoord), dFdy(surf.texCoord));
+    outGrad = sqrt(abs(grad)) * sign(grad);
+    outGradFull = (grad);
 #endif
 }

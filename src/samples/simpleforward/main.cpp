@@ -35,8 +35,7 @@ int main()
 
   bool showGUI = true;
 
-  std::shared_ptr<IRender> app = CreateRender(WIDTH, HEIGHT, RenderEngineType::SIMPLE_FORWARD);
-//  std::shared_ptr<IRender> app = CreateRender(WIDTH, HEIGHT, RenderEngineType::SIMPLE_TEXTURE);
+  std::shared_ptr<IRender> app = CreateRender(WIDTH, HEIGHT);
 
   if(app == nullptr)
   {
@@ -48,10 +47,14 @@ int main()
 
   initVulkanGLFW(app, window, VULKAN_DEVICE_ID, showGUI);
 
-  //app->LoadScene("../resources/scenes/02_cry_sponza/statex_00001.xml", false);
-  //app->LoadScene("../resources/scenes/043_cornell_normals/statex_00001.xml", false);
-   app->LoadScene("../resources/scenes_gltf/sponza-gltf-pbr/sponza.glb", false);
+  const std::vector<std::string> scenes = {
+    "../resources/scenes_gltf/sponza-gltf-pbr/sponza.glb",
+    "../resources/scenes_gltf/sponza_blendered/sponza.gltf",
+    "../resources/scenes_gltf/sponza_blendered_low/sponza_low.gltf",
+    "../resources/scenes/04_hair_balls/statex_00001.xml"
+  };
 
+  app->LoadScene(scenes[2].c_str(), false);
 
   mainLoop(app, window, showGUI);
 

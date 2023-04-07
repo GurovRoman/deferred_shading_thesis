@@ -134,7 +134,7 @@ bool SceneManager::LoadSceneXML(const std::string &scenePath, bool transpose)
     LoadCommonGeoDataOnGPU();
   }
 
-  if(m_config.instance_matrix_as_vertex_attribute)
+  if(m_config.instance_matrices_buffer)
   {
     LoadInstanceDataOnGPU();
   }
@@ -186,27 +186,6 @@ bool SceneManager::LoadSceneGLTF(const std::string &scenePath)
 
   const tinygltf::Scene& scene = gltfModel.scenes[0];
 
-//  for(const auto& gltfCam : gltfModel.cameras)
-//  {
-//    // @TODOw
-//    if(gltfCam.type == "perspective")
-//    {
-//      hydra_xml::Camera cam = {};
-//      cam.fov       = gltfCam.perspective.yfov / DEG_TO_RAD;
-//      cam.nearPlane = gltfCam.perspective.znear;
-//      cam.farPlane  = gltfCam.perspective.zfar;
-//      cam.pos[0] = 0.0f; cam.pos[1] = 0.0f; cam.pos[2] = 0.0f;
-//      cam.lookAt[0] = 0.0f; cam.lookAt[1] = 0.0f; cam.lookAt[2] = -1.0f;
-//      cam.up[0] = 0.0f; cam.up[1] = 1.0f; cam.up[2] = 0.0f;
-//      m_sceneCameras.push_back(cam);
-//    }
-//    else if (gltfCam.type == "orthographic")
-//    {
-//
-//    }
-//
-//  }
-
   InitMeshCPU(m_config.mesh_format);
 
   uint32_t maxVertexCountPerMesh    = 0u;
@@ -244,7 +223,7 @@ bool SceneManager::LoadSceneGLTF(const std::string &scenePath)
     m_materials.reserve(gltfModel.materials.size());
     for(const tinygltf::Material &gltfMat : gltfModel.materials)
     {
-      MaterialData_pbrMR mat = materialDataFromGLTF(gltfMat);
+      MaterialData_pbrMR mat = materialDataFromGLTF(gltfMat, gltfModel.textures);
       m_materials.push_back(mat);
     }
   }
@@ -271,7 +250,7 @@ bool SceneManager::LoadSceneGLTF(const std::string &scenePath)
     LoadCommonGeoDataOnGPU();
   }
 
-  if(m_config.instance_matrix_as_vertex_attribute)
+  if(m_config.instance_matrices_buffer)
   {
     LoadInstanceDataOnGPU();
   }
@@ -322,5 +301,32 @@ void SceneManager::LoadGLTFNodesRecursive(const tinygltf::Model &a_model, const 
     }
 
     InstanceMesh(a_loadedMeshesToMeshId[a_node.mesh], nodeMatrix);
+  }
+
+  if (a_node.camera > -1) {
+    auto gltfCam = a_model.cameras[a_node.camera];
+
+    if (gltfCam.type == "perspective")
+    {
+      hydra_xml::Camera cam = {};
+      cam.fov       = gltfCam.perspective.yfov / DEG_TO_RAD;
+      cam.nearPlane = gltfCam.perspective.znear;
+      cam.farPlane  = gltfCam.perspective.zfar;
+
+      auto pos = nodeMatrix * float4(0, 0, 0, 1);
+      pos /= pos.w;
+      cam.pos[0] = pos.x; cam.pos[1] = pos.y; cam.pos[2] = pos.z;
+
+      auto lookAt = nodeMatrix * float4(0, 0, -1, 1);
+      lookAt /= lookAt.w;
+      cam.lookAt[0] = lookAt.x; cam.lookAt[1] = lookAt.y; cam.lookAt[2] = lookAt.z;
+
+      cam.up[0] = 0.0f; cam.up[1] = 1.0f; cam.up[2] = 0.0f;
+      m_sceneCameras.push_back(cam);
+    }
+    else if (gltfCam.type == "orthographic")
+    {
+
+    }
   }
 }

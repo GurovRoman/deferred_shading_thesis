@@ -9,6 +9,6 @@
 void getNumVerticesAndIndicesFromGLTFMesh(const tinygltf::Model &a_model, const tinygltf::Mesh &a_mesh, uint32_t& numVertices, uint32_t& numIndices);
 cmesh::SimpleMesh  simpleMeshFromGLTFMesh(const tinygltf::Model &a_model, const tinygltf::Mesh &a_mesh);
 LiteMath::float4x4 transformMatrixFromGLTFNode(const tinygltf::Node &node);
-MaterialData_pbrMR materialDataFromGLTF(const tinygltf::Material &gltfMat);
+MaterialData_pbrMR materialDataFromGLTF(const tinygltf::Material &gltfMat, const std::vector<tinygltf::Texture>& gltfTextures);
 
 #endif// CHIMERA_GLTF_UTILS_H

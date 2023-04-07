@@ -55,7 +55,7 @@ struct LoaderConfig
 {
   bool load_geometry = true;
   MATERIAL_LOAD_MODE load_materials = MATERIAL_LOAD_MODE::NONE;
-  bool instance_matrix_as_vertex_attribute = false;
+  bool instance_matrices_buffer = false;
   bool debug_output = false;
   BVH_BUILDER_TYPE builder_type = BVH_BUILDER_TYPE::RTX;
   MATERIAL_FORMAT material_format = MATERIAL_FORMAT::METALLIC_ROUGHNESS;
@@ -106,6 +106,8 @@ struct SceneManager
   hydra_xml::Camera GetCamera(uint32_t camId) const;
   MeshInfo GetMeshInfo(uint32_t meshId) const {assert(meshId < m_meshInfos.size()); return m_meshInfos[meshId];}
   InstanceInfo GetInstanceInfo(uint32_t instId) const {assert(instId < m_instanceInfos.size()); return m_instanceInfos[instId];}
+  uint32_t GetInstanceOffsetForMesh(uint32_t meshId) const {assert(meshId < m_meshInstanceOffset.size()); return m_meshInstanceOffset[meshId];}
+  uint32_t GetInstanceCountForMesh(uint32_t meshId) const {assert(meshId < m_meshInstanceOffset.size() - 1); return m_meshInstanceOffset[meshId + 1] - m_meshInstanceOffset[meshId];}
   LiteMath::float4x4 GetInstanceMatrix(uint32_t instId) const {assert(instId < m_instanceMatrices.size()); return m_instanceMatrices[instId];}
 
 private:
@@ -127,6 +129,7 @@ private:
   std::shared_ptr<IMeshData> m_pMeshData = nullptr;
 
   std::vector<InstanceInfo> m_instanceInfos = {};
+  std::vector<uint32_t> m_meshInstanceOffset = {};
   std::vector<LiteMath::float4x4> m_instanceMatrices = {};
 
   std::vector<hydra_xml::Camera> m_sceneCameras = {};

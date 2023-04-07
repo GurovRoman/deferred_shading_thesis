@@ -141,10 +141,6 @@ hydra_xml::Camera SceneManager::GetCamera(uint32_t camId) const
 VkPipelineVertexInputStateCreateInfo SceneManager::GetPipelineVertexInputStateCreateInfo()
 {
   auto currState = m_pMeshData->VertexInputLayout();
-  if(m_config.instance_matrix_as_vertex_attribute)
-  {
-    vk_utils::AddInstanceMatrixAttributeToVertexLayout(1, sizeof(LiteMath::float4x4), currState);
-  }
   return currState;
 }
 
@@ -307,8 +303,25 @@ void SceneManager::LoadCommonGeoDataOnGPU()
 
 void SceneManager::LoadInstanceDataOnGPU()
 {
+  m_meshInstanceOffset.reserve(MeshesNum() + 1);
+  size_t meshInstanceOffset = 0;
+  for (size_t mesh_id = 0; mesh_id < MeshesNum(); ++mesh_id) {
+    m_meshInstanceOffset.push_back(meshInstanceOffset);
+    for (size_t inst_id = meshInstanceOffset; inst_id < InstancesNum(); ++inst_id) {
+      if (m_instanceInfos[inst_id].mesh_id == mesh_id) {
+        if (inst_id != meshInstanceOffset)
+        {
+          std::swap(m_instanceInfos[meshInstanceOffset].mesh_id, m_instanceInfos[inst_id].mesh_id);
+          std::swap(m_instanceMatrices[meshInstanceOffset], m_instanceMatrices[inst_id]);
+        }
+        ++meshInstanceOffset;
+      }
+    }
+  }
+  m_meshInstanceOffset.push_back(meshInstanceOffset);
+
   VkDeviceSize instMatBufSize = m_instanceMatrices.size() * sizeof(m_instanceMatrices[0]);
-  VkBufferUsageFlags flags = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+  VkBufferUsageFlags flags = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
   m_instMatricesBuf = vk_utils::createBuffer(m_device, instMatBufSize, flags);
   m_instMemAlloc    = vk_utils::allocateAndBindWithPadding(m_device, m_physDevice, {m_instMatricesBuf});
@@ -372,8 +385,6 @@ void SceneManager::LoadMaterialDataOnGPU()
     if(!m_textures.empty())
       m_texturesMemAlloc = m_textures[0].mem;
 
-    VkSampler common_sampler = vk_utils::createSampler(m_device, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
-      VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK);
     m_samplers.reserve(m_textures.size());
     m_textureViews.reserve(m_textureInfos.size());
 
@@ -396,12 +407,25 @@ void SceneManager::LoadMaterialDataOnGPU()
           vk_utils::executeCommandBufferNow(cmdBuf, m_graphicsQ, m_device);
         }
         m_textureViews.push_back(tex.view);
+
+
+        VkSamplerCreateInfo samplerCreateInfo = vk_utils::defaultSamplerCreateInfo(VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+          VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK, tex.mipLvls);
+
+        samplerCreateInfo.maxAnisotropy = 16.0;
+        samplerCreateInfo.anisotropyEnable = VK_TRUE;
+
+        VkSampler sampler;
+        VK_CHECK_RESULT(vkCreateSampler(m_device, &samplerCreateInfo, nullptr, &sampler));
+        m_samplers.push_back(sampler);
       }
       else
       {
         m_textureViews.push_back(m_textures.back().view);
+        VkSampler common_sampler = vk_utils::createSampler(m_device, VK_FILTER_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT,
+          VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK);
+        m_samplers.push_back(common_sampler);
       }
-      m_samplers.push_back(common_sampler);
     }
   }
 }
