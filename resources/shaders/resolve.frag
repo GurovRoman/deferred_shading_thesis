@@ -49,26 +49,6 @@ const float M_PI = 3.141592653589793;
 
 float sq(float x) { return x*x; }
 
-// Converts a color from linear light gamma to sRGB gamma
-vec3 fromLinear(vec3 linearRGB)
-{
-    bvec3 cutoff = lessThan(linearRGB, vec3(0.0031308));
-    vec3 higher = vec3(1.055)*pow(linearRGB, vec3(1.0/2.4)) - vec3(0.055);
-    vec3 lower = linearRGB.rgb * vec3(12.92);
-
-    return mix(higher, lower, cutoff);
-}
-
-// Converts a color from sRGB gamma to linear light gamma
-vec3 toLinear(vec3 sRGB)
-{
-    bvec3 cutoff = lessThan(sRGB, vec3(0.04045));
-    vec3 higher = pow((sRGB + vec3(0.055))/vec3(1.055), vec3(2.4));
-    vec3 lower = sRGB/vec3(12.92);
-
-    return mix(higher, lower, cutoff);
-}
-
 vec3 tonemapLottes(vec3 x) {
     // Lottes 2016, "Advanced Techniques and Optimization of HDR Color Pipelines"
     const float a = 1.6;
@@ -346,6 +326,10 @@ void main()
 
     if ((Params.debugFlags & 16) > 0) {
         out_fragColor = vec4(pbrData.albedo, 1.);
+    }
+
+    if ((Params.debugFlags & 32) > 0) {
+        out_fragColor = vec4(pbrData.metallic, pbrData.roughness, 0., 1.);
     }
 
 #ifdef UV_BUFFER

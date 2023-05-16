@@ -10,8 +10,8 @@
 layout (location = 0) in VS_OUT
 {
     vec3 sNorm;
-    vec3 sTangent;
     vec2 texCoord;
+    vec3 worldPos;
 } surf;
 
 layout(push_constant) uniform params_t
@@ -45,6 +45,39 @@ layout (binding = 4, set = 0) buffer MeshInfos { uvec2 o[]; } infos;
 #include "texture_data.glsl"
 #endif
 
+vec3 getNormal(vec3 N, vec3 N_tex)
+{
+    // Perturb normal, see http://www.thetenthplanet.de/archives/1180
+    /*vec3 q1 = dFdx(surf.worldPos);
+    vec3 q2 = dFdy(surf.worldPos);
+    vec2 st1 = dFdx(surf.texCoord);
+    vec2 st2 = dFdy(surf.texCoord);
+
+    N = normalize(N);
+    vec3 T = normalize(q1 * st2.t - q2 * st1.t);
+    vec3 B = -normalize(cross(N, T));
+    mat3 TBN = mat3(T, B, N);*/
+
+    // get edge vectors of the pixel triangle
+    vec3 dp1 = dFdx(surf.worldPos);
+    vec3 dp2 = dFdy(surf.worldPos);
+    vec2 duv1 = dFdx(surf.texCoord);
+    vec2 duv2 = dFdy(surf.texCoord);
+
+    N = normalize(N);
+    // solve the linear system
+    vec3 dp2perp = cross( dp2, N );
+    vec3 dp1perp = cross( N, dp1 );
+    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+
+    // construct a scale-invariant frame
+    float invmax = inversesqrt( max( dot(T,T), dot(B,B) ) );
+    mat3 TBN = mat3( T * invmax, B * invmax, N );
+
+    return normalize(TBN * N_tex);
+}
+
 void main()
 {
     const uint meshOffset = infos.o[params.meshID].x;
@@ -66,12 +99,9 @@ void main()
     TextureData data = sampleTextures(material, surf.texCoord);
 
     vec3 N = surf.sNorm;
-    /*if(material.normalTexId >= 0) {
-        vec3 T = surf.sTangent;
-        vec3 B = normalize(cross(N, T));
-        mat3 TBN = mat3(T, B, N);
-        N = TBN * data.normal;
-    }*/
+    if(material.normalTexId >= 0) {
+        N = getNormal(N, data.normal);
+    }
 
     outNormal = encode_normal(N);
     outAlbedo = vec4(data.albedo.xyz, 1.0);

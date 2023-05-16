@@ -1,3 +1,4 @@
+#include <unordered_set>
 #include "scene_mgr.h"
 #include "vk_utils.h"
 #include "../loader_utils/gltf_utils.h"
@@ -218,19 +219,24 @@ bool SceneManager::LoadSceneGLTF(const std::string &scenePath)
     }
   }
 
+  std::unordered_set<int> non_color_image_ids;
+
   if(m_config.load_materials != MATERIAL_LOAD_MODE::NONE)
   {
     m_materials.reserve(gltfModel.materials.size());
     for(const tinygltf::Material &gltfMat : gltfModel.materials)
     {
       MaterialData_pbrMR mat = materialDataFromGLTF(gltfMat, gltfModel.textures);
+      non_color_image_ids.insert(mat.normalTexId);
+      non_color_image_ids.insert(mat.metallicRoughnessTexId);
+      non_color_image_ids.insert(mat.occlusionTexId);
       m_materials.push_back(mat);
     }
   }
 
   if(m_config.load_materials == MATERIAL_LOAD_MODE::MATERIALS_AND_TEXTURES)
   {
-    m_textureInfos.reserve(m_materials.size() * 4);
+    m_textureInfos.reserve(gltfModel.images.size() + 1);
     for (tinygltf::Image &image : gltfModel.images)
     {
       auto texturePath      = sceneFolder + image.uri;
@@ -241,6 +247,7 @@ bool SceneManager::LoadSceneGLTF(const std::string &scenePath)
         ss << "Texture at \"" << texturePath << "\" is absent or corrupted." ;
         vk_utils::logWarning(ss.str());
       }
+      texInfo.is_non_color = non_color_image_ids.count(m_textureInfos.size()) > 0;
       m_textureInfos.push_back(texInfo);
     }
   }

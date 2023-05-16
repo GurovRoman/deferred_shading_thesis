@@ -47,14 +47,15 @@ TextureData sampleTextures(MaterialData_pbrMR material, vec2 uv) {
 
     data.normal = vec3(0.);
     if(material.normalTexId >= 0) {
-        data.normal = normalize(sampleTexture(all_textures[material.normalTexId], uv, lod, dUV).xyz * 2.0 - vec3(1.0));
+        data.normal = normalize(sampleTexture(all_textures[material.normalTexId], uv, lod, dUV).xyz * 2.0 - 1.0);
     }
 
     data.metallic  = material.metallic;
     data.roughness = material.roughness;
     if (material.metallicRoughnessTexId >= 0) {
-        data.metallic = sampleTexture(all_textures[material.metallicRoughnessTexId], uv, lod, dUV).b;
-        data.roughness = sampleTexture(all_textures[material.metallicRoughnessTexId], uv, lod, dUV).g;
+        vec2 metRough = sampleTexture(all_textures[material.metallicRoughnessTexId], uv, lod, dUV).bg;
+        data.metallic = metRough.x;
+        data.roughness = metRough.y;
     }
 
     return data;

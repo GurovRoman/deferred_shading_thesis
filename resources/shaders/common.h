@@ -27,7 +27,7 @@ typedef float4x4     mat4;
 
 #define MAX_TEXTURES 256
 
-#define SSAA_RATIO 1
+#define SSAA_RATIO 4
 
 struct PushConst
 {
@@ -72,5 +72,27 @@ struct MaterialData_pbrMR
   int alphaMode;
 
 };
+
+#ifndef __cplusplus
+// Converts a color from linear light gamma to sRGB gamma
+vec3 fromLinear(vec3 linearRGB)
+{
+  bvec3 cutoff = lessThan(linearRGB, vec3(0.0031308));
+  vec3 higher = vec3(1.055)*pow(linearRGB, vec3(1.0/2.4)) - vec3(0.055);
+  vec3 lower = linearRGB.rgb * vec3(12.92);
+
+  return mix(higher, lower, cutoff);
+}
+
+// Converts a color from sRGB gamma to linear light gamma
+vec3 toLinear(vec3 sRGB)
+{
+  bvec3 cutoff = lessThan(sRGB, vec3(0.04045));
+  vec3 higher = pow((sRGB + vec3(0.055))/vec3(1.055), vec3(2.4));
+  vec3 lower = sRGB/vec3(12.92);
+
+  return mix(higher, lower, cutoff);
+}
+#endif
 
 #endif //VK_GRAPHICS_BASIC_COMMON_H

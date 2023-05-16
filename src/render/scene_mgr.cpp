@@ -25,14 +25,14 @@ VkFormat formatFromImageInfo(const ImageFileInfo &info)
     switch(info.channels)
     {
     case 1:
-      res = VK_FORMAT_R8_SRGB;
+      res = info.is_non_color ? VK_FORMAT_R8_UNORM : VK_FORMAT_R8_SRGB;
       break;
     case 2:
-      res = VK_FORMAT_R8G8_SRGB;
+      res = info.is_non_color ? VK_FORMAT_R8G8_UNORM : VK_FORMAT_R8G8_SRGB;
       break;
     case 3:
     case 4:
-      res = VK_FORMAT_R8G8B8A8_SRGB;
+      res = info.is_non_color ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R8G8B8A8_SRGB;
       break;
     }
   }

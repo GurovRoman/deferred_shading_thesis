@@ -25,23 +25,24 @@ layout (binding = 5, set = 0) buffer InstanceMatrices { mat4 instanceMatrices[];
 layout (location = 0) out VS_OUT
 {
     vec3 sNorm;
-    vec3 sTangent;
     vec2 texCoord;
+    vec3 worldPos;
 } vOut;
 
 
 void main(void)
 {
     const vec3 wNorm = DecodeNormal(floatBitsToUint(vPosNorm.w));
-    const vec3 wTang = DecodeNormal(floatBitsToUint(vTexCoordAndTang.z));
 
     mat4 modelView = Params.view * instanceMatrices[gl_InstanceIndex];
 
     mat3 normalModelView = transpose(inverse(mat3(modelView)));
 
     vOut.sNorm    = normalize(mat3(normalModelView) * wNorm.xyz);
-    vOut.sTangent = normalize(mat3(normalModelView) * wTang.xyz);
     vOut.texCoord = vTexCoordAndTang.xy;
 
-    gl_Position   = Params.proj * modelView * vec4(vPosNorm.xyz, 1.0f);
+    vec4 worldPos = modelView * vec4(vPosNorm.xyz, 1.0f);
+
+    gl_Position   = Params.proj * worldPos;
+    vOut.worldPos = worldPos.xyz;
 }
