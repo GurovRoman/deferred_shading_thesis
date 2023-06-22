@@ -23,17 +23,22 @@ layout (binding = 4, std430) buffer Materials { MaterialData_pbrMR materials[]; 
 layout (binding = 5) uniform sampler2D all_textures[];
 #endif
 
-layout (input_attachment_index = 0, set = 1, binding = 0) uniform subpassInput inDepth;
-layout (input_attachment_index = 1, set = 1, binding = 1) uniform subpassInput inNormal;
+layout (set = 1, binding = 0) uniform sampler2D inDepth;
+layout (set = 1, binding = 1) uniform sampler2D inNormal;
 #ifndef UV_BUFFER
-layout (input_attachment_index = 2, set = 1, binding = 2) uniform subpassInput inAlbedo;
-layout (input_attachment_index = 3, set = 1, binding = 3) uniform subpassInput inMetRough;
+layout (set = 1, binding = 2) uniform sampler2D inAlbedo;
+layout (set = 1, binding = 3) uniform sampler2D inMetRoughAO;
+layout (set = 1, binding = 4) uniform sampler2D inEmissive;
 #else
-layout (input_attachment_index = 2, set = 1, binding = 2) uniform subpassInput inUV;
-layout (input_attachment_index = 3, set = 1, binding = 3) uniform usubpassInput inMatID;
-layout (input_attachment_index = 4, set = 1, binding = 4) uniform subpassInput inTextureLod;
-layout (input_attachment_index = 5, set = 1, binding = 5) uniform subpassInput inGrad;
-layout (input_attachment_index = 6, set = 1, binding = 6) uniform subpassInput inGradFull;
+layout (set = 1, binding = 2) uniform sampler2D inUV;
+layout (set = 1, binding = 3) uniform usampler2D inMatID;
+layout (set = 1, binding = 4) uniform sampler2D inGrad;
+#ifdef DRIST
+layout (set = 1, binding = 5) uniform sampler2D inGradFull;
+layout (set = 1, binding = 6) uniform sampler2D inPosXGradFull;
+layout (set = 1, binding = 7) uniform sampler2D inPosYGradFull;
+layout (set = 1, binding = 8) uniform sampler2D inFullNormals;
+#endif
 #endif
 
 layout (binding = 0, set = 2) uniform sampler2DShadow shadowmapTex;
@@ -133,8 +138,10 @@ struct PBRData {
     float dotNH;
 
     vec3 albedo;
+    vec3 emissive;
     float metallic;
     float roughness;
+    float occlusion;
 };
 
 // Normal Distribution function --------------------------------------
@@ -223,20 +230,17 @@ vec3 BRDF(PBRData d, float shadowmap_visibility)
     color += getIBLContribution(diffuseColor, specularColor, d.dotNV, d.roughness, d.N, reflection)
         * (1 - (1 - shadowmap_visibility) * (1 - Params.IBLShadowedRatio));
 
-    return color;
+    return color * d.occlusion + d.emissive;
 }
 
 void main()
 {
-    vec4 screenSpacePos = vec4(
-    2.0 * gl_FragCoord.xy / vec2(Params.screenWidth, Params.screenHeight) - 1.0,
-    subpassLoad(inDepth).r,
-    1.0);
+    vec2 screenUV = gl_FragCoord.xy / vec2(Params.screenWidth, Params.screenHeight);
 
-    /*if (screenSpacePos.z == 1.) {
-        out_fragColor = vec4(0.192, 0.373, 0.91, 1.);
-        return;
-    }*/
+    vec4 screenSpacePos = vec4(
+    2.0 * screenUV - 1.0,
+    textureLod(inDepth, screenUV, 0).r,
+    1.0);
 
     vec4 worldSpacePos = inverse(Params.proj * Params.view) * screenSpacePos;
 
@@ -257,23 +261,39 @@ void main()
     }
 
 #ifndef UV_BUFFER
-    pbrData.N = decode_normal(subpassLoad(inNormal).xy);
-    pbrData.albedo = subpassLoad(inAlbedo).rgb;
-    pbrData.metallic = subpassLoad(inMetRough).r;
-    pbrData.roughness = subpassLoad(inMetRough).g;
-#else
-    pbrData.N = decode_normal(subpassLoad(inNormal).xy);
-    // Normal mapping is missing here
+    pbrData.N = decode_normal(texture(inNormal, screenUV).xy);
+    pbrData.albedo = texture(inAlbedo, screenUV).rgb;
+    vec3 texVal = texture(inMetRoughAO, screenUV).rgb;
+    pbrData.metallic = texVal.r;
+    pbrData.roughness = texVal.g;
+    pbrData.occlusion = texVal.b;
 
-    vec2 uv = subpassLoad(inUV).rg;
-    uint matId = subpassLoad(inMatID).x;
+    vec4 emissive = texture(inEmissive, screenUV);
+    pbrData.emissive = emissive.rgb * (1 + emissive.a * 32);
+#else
+    pbrData.N = decode_normal(texture(inNormal, screenUV).xy);
+
+    vec2 uv = textureLod(inUV, screenUV, 0).rg;
+    uint matId = textureLod(inMatID, screenUV, 0).x;
+
+    vec3 camspace_position = (Params.view * vec4(position, 1)).xyz;
+    //GradData grad = reconstructGradients(camspace_position, uv, matId);
+
+    vec4 fdUV = textureLod(inGrad, screenUV, 0);
+    fdUV = (fdUV * fdUV) * sign(fdUV);
+
     MaterialData_pbrMR material = materials[matId];
-    TextureData texData = sampleTextures(material, uv);
+    TextureData texData = sampleTextures(material, uv, fdUV);
+
+    //pbrData.N = getNormalWithGrad(pbrData.N, texData.normal, grad);
 
     pbrData.albedo = texData.albedo.rgb;
     pbrData.metallic = texData.metallic;
     pbrData.roughness = texData.roughness;
+    pbrData.occlusion = texData.occlusion;
+    pbrData.emissive = texData.emissive;
 #endif
+    vec3 N_restored = pbrData.N;
 
     if ((Params.debugFlags & 2) > 0) {
         pbrData.metallic = Params.debugMetallic;
@@ -313,40 +333,44 @@ void main()
     else
         out_fragColor = vec4(color, 1.);
 
-    // display ldr overflow
-    if ((Params.debugFlags & 8) > 0)
-        if (any(greaterThan(out_fragColor, vec4(1.))))
-            out_fragColor = vec4(0., 0., 1., 1.);
-    else
-        out_fragColor = clamp(out_fragColor, 0., 1.);
+    out_fragColor = clamp(out_fragColor, 0., 1.);
 
     if ((Params.debugFlags & 1) > 0) {
-        out_fragColor = vec4(pbrData.N, 1.);
+        out_fragColor = vec4(vec3(-N_restored.z), 1.);
     }
 
     if ((Params.debugFlags & 16) > 0) {
         out_fragColor = vec4(pbrData.albedo, 1.);
     }
 
+#ifdef UV_BUFFER
+    #ifdef DRIST
     if ((Params.debugFlags & 32) > 0) {
-        out_fragColor = vec4(pbrData.metallic, pbrData.roughness, 0., 1.);
+        vec3 NFull = textureLod(inFullNormals, screenUV, 0).xyz;
+
+        out_fragColor = vec4(abs(N_restored - NFull) * 1, 1);
+        //out_fragColor = vec4(fromLinear(out_fragColor.rgb), out_fragColor.a);
+        return;
     }
 
-#ifdef UV_BUFFER
     if ((Params.debugFlags & 128) > 0) {
-        vec4 dUV = (subpassLoad(inGrad));
-        dUV = (dUV * dUV) * sign(dUV);
-
-        vec4 dUVFull = subpassLoad(inGradFull);
-        vec4 dUVAuto = vec4(dFdx(subpassLoad(inUV).xy), dFdy(subpassLoad(inUV).xy));
+        vec4 dUVFull = textureLod(inGradFull, screenUV, 0);
+        vec4 dPFullX = textureLod(inPosXGradFull, screenUV, 0);
+        vec4 dPFullY = textureLod(inPosYGradFull, screenUV, 0);
+        vec4 dP = vec4(dFdy(camspace_position), 0);
+        vec4 dUV = vec4(dFdx(uv), dFdy(uv));
 
         if ((Params.debugFlags & 64) > 0) {
-            out_fragColor = abs(dUV);
+            out_fragColor = vec4(abs(decode_normal(texture(inNormal, screenUV).xy)), 1);
+            out_fragColor = vec4(vec3(abs(dFdx(matId)), abs(dFdy(matId)), 0), 1.);
+            //out_fragColor = vec4(all(equal(dUV, vec4(0))));
         } else {
-            out_fragColor = abs(dUV - dUVFull) * 1000;
+            out_fragColor = vec4(abs(grad.dUV - dUVFull) * 100);
+            //out_fragColor = vec4(abs(vec4(camspace_position, 0) - dUVFull) * 100);
         }
         return;
     }
+    #endif
 #endif
 
     out_fragColor = vec4(fromLinear(out_fragColor.rgb), out_fragColor.a);

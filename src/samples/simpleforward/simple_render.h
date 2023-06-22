@@ -27,7 +27,8 @@ struct GBuffer
   std::vector<GBufferLayer> color_layers;
   GBufferLayer depth_stencil_layer;
   GBufferLayer finalImage;
-  VkRenderPass renderpass {VK_NULL_HANDLE};
+  VkRenderPass renderpass_gbuffer {VK_NULL_HANDLE};
+  VkRenderPass renderpass_resolve {VK_NULL_HANDLE};
 };
 
 class SimpleRender : public IRender
@@ -175,7 +176,8 @@ protected:
   std::shared_ptr<SceneManager> m_pScnMgr;
 
   GBuffer m_gbuffer;
-  VkFramebuffer m_mainPassFrameBuffer;
+  VkFramebuffer m_gbufferPassFrameBuffer;
+  VkFramebuffer m_resolvePassFrameBuffer;
 
   VkRenderPass m_postFxRenderPass;
   pipeline_data_t m_postFxPipeline;

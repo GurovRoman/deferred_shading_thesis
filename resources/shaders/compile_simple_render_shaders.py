@@ -21,8 +21,17 @@ def compile(shader_files, *, force_recompile=False, is_uv_buffer=False):
         print(f"Up to date: {', '.join(up_to_date)}")
 
 
+def includes_changed(include_files, spv_files):
+    oldest_compiled = min([os.path.getmtime(x) for x in spv_files])
+    newest_include = max([os.path.getmtime(x) for x in include_files])
+
+    return newest_include > oldest_compiled
+
+
 if __name__ == '__main__':
     force_recompile = "-f" in sys.argv
+
+    include_files = ["common.h", "normal_packing.glsl", "texture_data.glsl"]
 
     shader_list = [
         "gbuffer.vert", "gbuffer.frag",
@@ -33,10 +42,16 @@ if __name__ == '__main__':
         "postfx.frag"
     ]
 
-    compile(shader_list, force_recompile=force_recompile)
-
-    shader_list = [
+    shader_list_uv = [
         "gbuffer.frag", "resolve.frag"
     ]
 
-    compile(shader_list, force_recompile=force_recompile, is_uv_buffer=True)
+    force_recompile = force_recompile or includes_changed(
+        include_files,
+        [f"{x}.spv" for x in shader_list] +
+        [f"{x}.uvbuf.spv" for x in shader_list_uv]
+    )
+
+    compile(shader_list, force_recompile=force_recompile)
+
+    compile(shader_list_uv, force_recompile=force_recompile, is_uv_buffer=True)

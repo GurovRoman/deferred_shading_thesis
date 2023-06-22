@@ -51,10 +51,11 @@ int main()
     "../resources/scenes_gltf/sponza-gltf-pbr/sponza.glb",
     "../resources/scenes_gltf/sponza_blendered/sponza.gltf",
     "../resources/scenes_gltf/sponza_blendered_low/sponza_low.gltf",
-    "../resources/scenes/04_hair_balls/statex_00001.xml"
+    "../resources/scenes/04_hair_balls/statex_00001.xml",
+    "../resources/scenes_gltf/van_changed/scene.gltf"
   };
 
-  app->LoadScene(scenes[2].c_str(), false);
+  app->LoadScene(scenes[1].c_str(), false);
 
   mainLoop(app, window, showGUI);
 
